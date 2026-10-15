@@ -271,7 +271,7 @@ Each frame's raw score `s(t)` (sampled at 2 Hz) becomes a list of candidate segm
 5. **Snap and pad.** Extend each run to the nearest shot boundary if one is within 1 s, and pad by 0.5 s on each side.
 6. **Rank.** Score each segment as `peak_z × (1 + 0.1·log(1 + duration_s))`, apply NMS on time overlap, and return the top K (default 10).
 
-Each candidate returns: `start`, `end`, `score`, `peak_t`, `reason` (visual, face, or dialogue), `thumbs[]` (shot thumbnails), and for face hits `face_bbox` at `peak_t`. The API also returns the full `z(t)` series, downsampled, so the UI can draw the heat-map.
+Each candidate returns: `start`, `end`, `score`, `peak_t`, `reason` (visual, face, or dialogue), `thumbs[]` (shot thumbnails), `has_face` (whether a face box exists at `peak_t`, which enables face-crop export), and for face hits `face_bbox` at `peak_t`. Dialogue candidates also return `matched_words[]` (`{word, start, end}` from the transcript), so the UI can quote the line. The API also returns the `z(t)` series, max-pooled into `heat_bins` buckets (default 512, range 64–4096), so the UI can draw the heat-map without downloading every 2 Hz sample. Max-pooling keeps short spikes visible at coarse resolution.
 
 ### Optional reranker (off by default)
 
@@ -301,7 +301,9 @@ Options:
 | `GET /movies` / `GET /movies/{id}` | — | movie metadata + status |
 | `GET /jobs/{id}/events` | — | SSE stream of `{stage, pct, eta_s, message}` |
 | `POST /jobs/{id}/cancel` | — | `202` (also stops the Colab session) |
-| `POST /movies/{id}/search` | `{type: text\|image\|dialogue, q?, image? (multipart), top_k?, also_dialogue?}` | `{candidates: [...], heat: [...]}` |
+| `GET /movies/{id}/index-progress` | — | snapshot of every index stage `{stage, state: pending\|running\|done\|failed, pct, eta_s}` plus `gpu` and `compute_units_used`; the UI calls it when a page resumes, then reopens SSE |
+| `GET /movies/{id}/shots` | `?from=&to=` (seconds; default whole movie) | `[{idx, start, end, thumb_url}]` for the strip at the current zoom |
+| `POST /movies/{id}/search` | `{type: text\|image\|dialogue, q?, image? (multipart), top_k?, also_dialogue?, heat_bins?}` | `{candidates: [...], heat: [...]}` (see §6 for candidate fields) |
 | `POST /movies/{id}/clips` | `{start, end, mode: accurate\|fast, format: mp4\|gif, subs?, crop?}` | `{clip_id, job_id}` |
 | `GET /clips/{id}/file` | — | the clip (Range-enabled) |
 | `GET /media/{id}/proxy.mp4` | — | proxy for the player (Range-enabled) |

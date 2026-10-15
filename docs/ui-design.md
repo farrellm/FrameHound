@@ -481,7 +481,7 @@ Tone rules:
 | Export | `POST /movies/{id}/clips`, `GET /jobs/{id}/events`, `GET /clips/{id}/file` |
 | Errors / banners | `GET /health` (Colab auth, balance) |
 
-**API changes this UI implies.** These are not yet in design.md:
+**API additions this UI relies on.** These have been added to design.md (§6 candidate fields, §8 endpoints):
 
 1. `GET /movies/{id}/shots?from=&to=`, which returns thumbnail URLs for the strip at the current zoom.
 2. Search `heat` returned at a requested resolution (`heat_bins`), so the phone overview doesn't download 14k points.
