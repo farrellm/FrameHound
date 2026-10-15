@@ -37,6 +37,8 @@ The design rests on one split. The machine-learning work that has to see every f
 
 ## 2. User flow
 
+The screens, visual language, and iPhone behavior are specified in [ui-design.md](ui-design.md).
+
 1. **Add a movie.** The user pastes a URL, an archive.org link, or a magnet link, or uploads a `.torrent` file. If the archive.org link points to a *collection* rather than a single item, the UI lists the collection's items for the user to pick from. The example in the brief, `archive.org/details/bittorrent`, is a collection named "Archive Torrents" and contains no video file of its own.
 2. **Watch progress.** A single progress bar steps through: downloading → probing → provisioning GPU → staging media → indexing (shots / frames / faces / transcript) → importing → ready.
 3. **Search.** The user picks a query type and enters text, drops in an image, or types a quote.
