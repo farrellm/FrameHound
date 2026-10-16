@@ -1,0 +1,36 @@
+# Installed into ~/.config/systemd/user/ by `make deploy`. %h below assumes
+# the repo is at ~/workspace/FrameHound; a clone anywhere else needs these
+# paths changed.
+[Unit]
+Description=FrameHound (docker compose, served on the tailnet)
+Documentation=file://%h/workspace/FrameHound/README.md
+# A *user* manager cannot order against system units (docker.service,
+# tailscaled) and has no network-online.target. The boot race is handled by
+# waiting for the docker daemon below and by Restart=on-failure retrying
+# forever if tailscaled is not up yet.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/workspace/FrameHound
+ExecStartPre=/bin/sh -c 'until /usr/bin/docker info >/dev/null 2>&1; do sleep 2; done'
+# No --build: `make deploy` builds the images, so a boot never rebuilds.
+# --wait blocks until every service is running (none has a healthcheck).
+ExecStart=/usr/bin/docker compose up -d --wait
+# Port 8449, tailnet-only: 443 and 8443-8448 belong to other apps on this host.
+# `serve` and never `funnel` -- there is no auth until M4 (design.md §10), so
+# the tailnet is the whole perimeter. 8080 is the FH_PORT default the web
+# container binds on 127.0.0.1. Idempotent; keeps this unit the single source
+# of truth for how FrameHound is exposed, even though tailscaled persists the
+# serve config on its own. `timeout` guards against the CLI hanging.
+ExecStartPost=/usr/bin/timeout 15 /usr/bin/tailscale serve --bg --https=8449 http://127.0.0.1:8080
+ExecStop=/usr/bin/docker compose down
+ExecStopPost=-/usr/bin/timeout 15 /usr/bin/tailscale serve --https=8449 off
+Restart=on-failure
+RestartSec=10
+# The first boot after a prune may pull redis.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

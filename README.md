@@ -53,7 +53,21 @@ downloads Whisper large-v3 (about 3 GB). On a CPU, large-v3 takes roughly as lon
 as the film, so for trying things out set `FH_MODELS_LOCK=models.tiny.lock` in
 `.env`. An index can only be searched by an api running the same lock.
 
+### As a service on the tailnet
+
+```sh
+make deploy     # build, install docker/framehound.service as a user unit, start it
+```
+
+The unit brings the stack up at boot (it needs `loginctl enable-linger`) and
+publishes it with `tailscale serve` at https://agda.tail0cb6d.ts.net:8449.
+That mapping is tailnet-only, never Funnel, because there is no auth until M4.
+`make status` shows the unit and the mapping, `make logs` follows the stack, and
+`make undeploy` removes the unit and the mapping.
+
 ## Develop
+
+`make help` lists the shortcuts for everything below.
 
 ```sh
 uv sync --all-packages --all-extras
