@@ -4,12 +4,16 @@ A self-hosted webapp that downloads a movie, finds a moment in it by description
 picture, or a line of dialogue, and cuts a clip. See [docs/design.md](docs/design.md)
 (system) and [docs/ui-design.md](docs/ui-design.md) (UI).
 
-**Status: milestone M3 (faces & images).** Implemented:
+**Status: milestone M4 (torrents & polish).** Implemented:
 
 - Docker Compose stack: `web` (nginx + React SPA), `api` (FastAPI), `redis`,
   `worker-io` and `worker-index` (RQ).
 - Ingest from plain HTTP(S) and archive.org, including the collection picker,
   with an SSRF guard, resumable downloads, and checksum checks.
+- Magnet links and `.torrent` files, downloaded with libtorrent on this host
+  (never on Colab; the proxy is uploaded to the VM instead). Only the largest
+  video file is fetched, private-network peers are refused, a stalled torrent
+  fails after `TORRENT_STALL_S`, and seeding is off unless `SEED_RATIO` is set.
 - ffprobe validation, content-hash deduplication, and a 720p proxy for playback.
 - `ColabIndexBackend` (the default): a Colab GPU per movie through the `colab`
   CLI, with GPU fallback, a compute-unit budget, a detached run polled every
@@ -26,15 +30,20 @@ picture, or a line of dialogue, and cuts a clip. See [docs/design.md](docs/desig
   the same face outranks a similar-looking frame.
 - Dialogue search: fuzzy lexical and semantic matching, word-accurate bounds,
   and the heat-map series.
-- Accurate (re-encoded) and quick (stream copy) MP4 clips, optionally cropped
+- Accurate (re-encoded) and quick (stream copy) MP4 clips, MP4 with the
+  transcript burned in as subtitles, and GIFs of up to 15 s, optionally cropped
   to the face of a Same face match.
+- A disk quota (`MAX_DATA_GB`) with LRU eviction: clips first, then original
+  files (the movie stays searchable; Re-download brings the file back without
+  re-indexing), then whole movies.
+- An optional shared access token (`FH_TOKEN`), as a bearer token or a sign-in
+  cookie.
 - The UI: library, indexing progress over SSE, search and a timeline strip with
   real shot thumbnails, and the export sheet, at iPhone and desktop sizes.
 
-Not yet: torrents, GIF and subtitle export, the reranker, eviction, and token
-auth (M4). Movies indexed before M3 need a re-index (the models lock changed)
-before they can be searched. InsightFace's pretrained face models are licensed
-for non-commercial research use.
+Not yet: the optional VLM reranker (deferred). Movies indexed before M3 need a
+re-index (the models lock changed) before they can be searched. InsightFace's
+pretrained face models are licensed for non-commercial research use.
 
 ## Run it
 
@@ -61,7 +70,8 @@ make deploy     # build, install docker/framehound.service as a user unit, start
 
 The unit brings the stack up at boot (it needs `loginctl enable-linger`) and
 publishes it with `tailscale serve` at https://agda.tail0cb6d.ts.net:8449.
-That mapping is tailnet-only, never Funnel, because there is no auth until M4.
+That mapping is tailnet-only, never Funnel. Set `FH_TOKEN` in `.env` so every
+device on the tailnet has to sign in too.
 `make status` shows the unit and the mapping, `make logs` follows the stack, and
 `make undeploy` removes the unit and the mapping.
 

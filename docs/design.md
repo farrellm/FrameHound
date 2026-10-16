@@ -122,10 +122,12 @@ All models are pinned in one `models.lock` file (model id, revision or commit ha
   - Otherwise, choose a video file by format preference: `h.264` / `h.264 HD` / `MPEG4` > `512Kb MPEG4` > `Ogg Video` > `Matroska`. Prefer `source: original` over derivatives, and among equally preferred files take the larger one. The download URL is `https://archive.org/download/{id}/{name}`. The item's `md5`/`sha1` from the metadata is kept so the download can be verified.
   - Every item also exposes `{id}_archive.torrent`, but HTTP is used for archive.org because it is simpler and fast enough.
 - **Plain HTTP(S).** Downloaded with httpx in streaming mode. Interrupted downloads resume using `Range` requests. The resolver checks `Content-Type`/`Content-Length` first.
-- **Magnet / .torrent.** Downloaded with libtorrent on the **host**:
-  - Only the largest file with a video extension is downloaded (all other files get priority 0).
-  - Seeding is configurable (`SEED_RATIO`, default 0 = stop when complete).
-  - A stall timeout applies: the job fails if there are no peers for N minutes.
+- **Magnet / .torrent.** Downloaded with libtorrent (`server/framehound/torrent.py`) on the **host**:
+  - A magnet's `source_ref` is `btih:{v1 info hash}` (hex or base32 in the link), so the same torrent pasted twice, or as a magnet and as a file, is a duplicate. An uploaded `.torrent` (at most `MAX_TORRENT_KB`) is parsed at once and kept as `source.torrent`, so a re-download needs nothing else.
+  - Only the largest file with a video extension is downloaded (all other files get priority 0: up front for a `.torrent`, as soon as a magnet's metadata arrives). It lands in `torrent/` and moves to `source.{ext}` when complete; an interrupted download resumes there after libtorrent rechecks the pieces.
+  - Seeding is configurable (`SEED_RATIO`, default 0 = stop when complete; at most `SEED_MAX_S`).
+  - A stall timeout applies: the job fails with `torrent_stalled` when there are no peers, or no progress, for `TORRENT_STALL_S` (default 10 min), including while waiting for a magnet's metadata. The Downloading stage shows the peer count.
+  - The SSRF rule holds for peers too: an IP filter refuses loopback, RFC1918, link-local, CGNAT and multicast peers and trackers, and libtorrent's `ssrf_mitigation` is on.
 
 ### Validation and normalization
 
@@ -280,7 +282,7 @@ Each frame's raw score `s(t)` (sampled at 2 Hz) becomes a list of candidate segm
 
 Each candidate returns: `start`, `end`, `score`, `peak_t`, `reason` (visual, face, or dialogue), `thumbs[]` (shot thumbnails), `has_face` (whether a face box exists at `peak_t`, which enables face-crop export), and for face hits `face_bbox` at `peak_t`. Dialogue candidates also return `matched_words[]` (`{word, start, end}` from the transcript), so the UI can quote the line. The API also returns the `z(t)` series, max-pooled into `heat_bins` buckets (default 512, range 64–4096), so the UI can draw the heat-map without downloading every 2 Hz sample. Max-pooling keeps short spikes visible at coarse resolution.
 
-### Optional reranker (off by default)
+### Optional reranker (off by default; deferred past M4)
 
 When `RERANK=on`, the top K candidates' peak thumbnails are sent to a vision-language model (default Claude, `claude-opus-5-5`). The prompt is "Does this frame show: {q}? Answer yes/no with confidence". Candidates the model rejects drop in the ranking. This sends frames to a third party, so it is opt-in and the UI says so.
 
@@ -295,8 +297,8 @@ Clips are always cut from the original `source.*`, never from the proxy.
 
 Options:
 
-- **GIF.** Two passes, with `fps=12,scale=480:-1:flags=lanczos,palettegen` followed by `paletteuse=dither=sierra2_4a`. Capped at 15 s.
-- **Burn-in subtitles.** The worker writes the transcript words inside `[start, end]` to an `.srt` file, with timestamps shifted so the clip starts at 0, then applies `-vf subtitles=clip.srt`.
+- **GIF.** One ffmpeg run whose filtergraph splits the stream: `fps=12,scale=min(480,iw):-2:flags=lanczos`, then `palettegen` over the clip on one branch and `paletteuse=dither=sierra2_4a` on the other. No audio. Capped at `MAX_GIF_S` (15 s), and always cut accurately.
+- **Burn-in subtitles.** The worker writes the transcript words whose midpoint is inside `[start, end]` to `clips/{id}.srt`, with timestamps shifted so the clip starts at 0, and applies `-vf subtitles=filename={id}.srt` (ffmpeg runs in the clips directory, so the server-derived name needs no filtergraph escaping). Cues break at segment boundaries, at pauses over 0.8 s, past two 42-character lines, or past 4 s (`server/framehound/subtitles.py`). MP4 only, needs the dialogue index, and always re-encodes.
 - **Face crop.** For face hits, crop to the face's bounding box expanded 2.5× around its centre, grown to portrait 9:16, or to 1:1 when 9:16 doesn't fit the frame's height (shrunk to fit if neither does), kept inside the frame, with even dimensions. It uses `crop=` with a fixed box taken at `peak_t`, which the client sends as `face_bbox`. Cropping re-encodes, so it always cuts in accurate mode. Tracking a moving face is out of scope for v1.
 - **Limits.** Clips are at most `MAX_CLIP_S` (default 120 s). Outputs are served with HTTP Range support and garbage-collected after `CLIP_TTL`.
 
@@ -314,12 +316,13 @@ Options:
 | `GET /movies/{id}/index-progress` | — | snapshot of every index stage `{stage, state: pending\|running\|done\|failed, pct, eta_s}` plus `gpu` and `compute_units_used`; the UI calls it when a page resumes, then reopens SSE |
 | `GET /movies/{id}/shots` | `?from=&to=` (seconds; default whole movie) | `[{idx, start, end, thumb_url}]` for the strip at the current zoom |
 | `POST /movies/{id}/search` | `{type: text\|image\|dialogue, q?, image? (multipart), top_k?, also_dialogue?, heat_bins?}` | `{candidates: [...], heat: [...], face_found?}` (see §6 for candidate fields) |
-| `POST /movies/{id}/clips` | `{start, end, mode: accurate\|fast, format: mp4\|gif, subs?, crop?, face_bbox?}` (`face_bbox` is the candidate's, required with `crop`) | `{clip_id, job_id}` |
+| `POST /movies/{id}/clips` | `{start, end, mode: accurate\|fast, format: mp4\|gif, subs?, crop?, face_bbox?}` (`subs` is MP4 only; subs, GIF and crop force accurate) (`face_bbox` is the candidate's, required with `crop`) | `{clip_id, job_id}` |
 | `GET /clips/{id}` | — | clip metadata, `ready`, and its job |
 | `GET /clips/{id}/file` | — | the clip (Range-enabled) |
 | `GET /jobs/{id}` | — | job state with per-stage progress |
 | `GET /media/{id}/proxy.mp4` | — | proxy for the player (Range-enabled) |
-| `GET /health` | — | redis, disk, `colab` auth status, compute-unit balance |
+| `GET /health` | — | redis, disk, `colab` auth status, compute-unit balance; only `{auth_required, signed_in}` without the token |
+| `POST /auth` / `DELETE /auth` | `{token}` | sets / clears the sign-in cookie (`401 bad_token` for a wrong token) |
 
 ## 9. Data model (SQLite)
 
@@ -327,7 +330,7 @@ Options:
 movies(id TEXT PK, sha256 TEXT UNIQUE, title, source_kind, source_ref,
        source_url, source_md5, source_file,
        duration_s REAL, width, height, fps, bytes, models_lock_hash,
-       status TEXT /* ingesting|indexing|ready|failed|cancelled|merged */,
+       status TEXT /* ingesting|indexing|ready|failed|cancelled|merged|evicted */,
        error TEXT, merged_into TEXT, created_at, last_accessed_at)
 jobs(id TEXT PK, movie_id, kind TEXT /* ingest|index|clip */, state TEXT,
      stage TEXT, pct REAL, eta_s REAL, message TEXT, error TEXT, error_code TEXT,
@@ -344,7 +347,7 @@ transcript_segments(movie_id, seg INT, start REAL, end REAL, text TEXT,
                     words_json TEXT, PRIMARY KEY(movie_id, seg))
 queries(id PK, movie_id, type, q, image_sha, created_at, latency_ms)
 clips(id PK, movie_id, start REAL, end REAL, mode, format, path, job_id, created_at,
-      crop_box TEXT /* JSON [x, y, w, h], fractions of the frame */)
+      crop_box TEXT /* JSON [x, y, w, h], fractions of the frame */, subs INT)
 ```
 
 `transcript_segments` also gets an FTS5 virtual table, which is used for fast exact-phrase prefiltering before the fuzzy match.
@@ -370,9 +373,10 @@ clip:    queued → cutting → ready | failed
   - Only one Colab session runs at a time by default (`MAX_COLAB_SESSIONS=1`). Further index jobs wait in the queue.
   - Each job's compute units used (from the before/after difference in `colab usage`) and its GPU type are recorded and shown in the UI.
 - **Disk.**
-  - Quota by `MAX_DATA_GB`.
-  - LRU eviction by `last_accessed_at`. The `source.*` file is evicted before the index, and the movie then shows "re-download to clip".
-- **Auth.** v1 binds to localhost by default. When exposed, the app requires a single shared bearer token (`FH_TOKEN`).
+  - Quota by `MAX_DATA_GB` (0 = none) over `movies/`, checked before each download (counting its expected size), after each proxy, and hourly by the api (`server/framehound/evict.py`, under a file lock so the api and worker-io don't both evict for one overage).
+  - LRU eviction by `last_accessed_at` (a search touches it), skipping movies with a queued or running job. Each pass runs over every movie before the next starts: clip files, then a ready movie's `source.*` (it stays searchable, plays from the proxy, and shows "re-download to clip"), then the rest of a movie (`status = evicted`, index rows dropped, `source.torrent` kept).
+  - **Re-download** (`POST /movies/{id}/retry`) on a movie whose index is current downloads the source again, checks its SHA-256 against the recorded one, and goes straight back to ready without indexing. An evicted movie goes through ingest and indexing.
+- **Auth.** v1 binds to localhost by default. When `FH_TOKEN` is set, every request but `/health` and `/auth` needs it, as `Authorization: Bearer` or as the `fh_auth` cookie that `POST /auth` sets (HttpOnly, SameSite=Lax, Secure behind https). `<video>`, `<img>`, EventSource and clip links can't send headers, hence the cookie. It holds an HMAC of the token, so changing `FH_TOKEN` signs every browser out.
 - **Observability.**
   - Logs are structured JSON.
   - Every `colab` invocation is logged with its argv, exit code, and duration.
@@ -385,7 +389,10 @@ clip:    queued → cutting → ready | failed
   - segment builder (normalization, merge, snap, NMS) on synthetic score curves,
   - `SourceResolver` with recorded archive.org metadata JSON (item, collection, item with no video) and a mocked advancedsearch,
   - SSRF guard (private IPs, redirect to a private IP, DNS rebinding),
-  - SRT time-shifting.
+  - SRT time-shifting and cue grouping,
+  - torrent ingest against an in-process libtorrent seeder on 127.0.0.1 (magnet and `.torrent`), the stall timeout, and the private-peer filter,
+  - eviction order, and re-download with a matching and a mismatched file,
+  - token auth (bearer, cookie, rotation).
 - **`ColabIndexBackend` tests:** a **fake `colab` executable** (`server/tests/fake_colab.py`) is put on `PATH`. Each session is a directory standing in for the VM, so the real launch/poll/util scripts run and start the fake indexer. It records argv and simulates these scenarios:
   - success,
   - `new` returning 400 (should trigger the GPU fallback),
@@ -404,7 +411,8 @@ clip:    queued → cutting → ready | failed
 | **M1 — Skeleton** (done) | Compose stack, HTTP + archive.org ingest (incl. collection picker), proxy, `LocalIndexBackend` with transcript only, dialogue search, accurate MP4 clip. |
 | **M2 — Colab + visual** (done) | `ColabIndexBackend` (provision → detached run → poll → fetch → stop, reconciler, budget), shots + SigLIP, text search, timeline/heat-map UI. |
 | **M3 — Faces & images** (done) | InsightFace stage, image/face search and fusion, face crop export. |
-| **M4 — Torrents & polish** | libtorrent ingest + proxy upload path, GIF and subtitle export, optional VLM reranker, eviction, token auth. |
+| **M4 — Torrents & polish** (done) | libtorrent ingest + proxy upload path, GIF and subtitle export, eviction, token auth. |
+| **Later** | Optional VLM reranker (§6). |
 
 ## 13. Risks and open questions
 

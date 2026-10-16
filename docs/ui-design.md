@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Draft |
 | **Author** | farrellm |
-| **Last updated** | 2026-10-15 |
+| **Last updated** | 2026-10-16 |
 | **Companion to** | [design.md](design.md) (system and pipeline) |
 
 ## 1. Purpose
@@ -137,6 +137,8 @@ Library ──(Add movie)──► Movie ──┬── Indexing   (until ready
 | `/m/{id}?q=…&mode=describe\|picture\|quote` | Search with a query restored. Shareable, and it survives a reload. |
 | `/m/{id}?in=…&out=…` | A selection restored, ready to export. |
 
+**Sign in.** When the server has `FH_TOKEN` set and this browser has no sign-in cookie, every route shows one screen instead: the FrameHound title, "This FrameHound needs its access token. It's FH_TOKEN in the server's .env.", a password field labelled **Access token**, and **Sign in**. A wrong token says "That token isn't right." Signing in reloads the route the user asked for. The cookie lasts about a year, so on a phone this is a one-time step.
+
 The **Movie** screen is one URL with two states, so a phone left on the Indexing view turns into Search by itself when the movie is ready. There is no tab bar: the app has one primary path, and a back button covers the rest.
 
 ## 4. Screens
@@ -202,6 +204,8 @@ iPhone                                Desktop
 | Already added | "You've already added this movie." Button: **Open it** (goes straight to Search, with no second indexing). |
 | Collection with no videos | "This collection has no movies FrameHound can index. Try a link to a single item." |
 | Blocked address (SSRF guard) | "FrameHound can't download from private network addresses. Use a public link." |
+| Torrent with no video | "This torrent has no movie file FrameHound can index." |
+| Removed to save space | Row state "Removed to save space". The Movie screen says FrameHound removed the files to stay under its disk limit, with **Re-download** (downloads and indexes again) and **Remove movie**. |
 
 ### 4.2 Indexing progress
 
@@ -264,6 +268,8 @@ iPhone                                Desktop
 | No GPU available | "Colab has no L4 or T4 available for this account right now. FrameHound will try again in 10 minutes." | **Index on this computer instead** (slow) |
 | Budget reached | "This would pass this month's GPU budget (40 compute units). Raise the budget in settings or index on this computer." | **Index on this computer instead** |
 | Download stalled | "The torrent has had no peers for 10 minutes." | **Retry**, **Remove movie** |
+
+While a torrent downloads, the Downloading stage shows the peer count under its name ("4 peers", or "Finding peers" while a magnet's details arrive).
 
 ### 4.3 Search and timeline
 
@@ -375,6 +381,7 @@ Pressing ? opens the key list.
 | No match above threshold | "No clear matches. The strongest moments are marked on the strip. Try fewer words, or a different mode." The strip still shows weak heat, so the user can browse it. |
 | Picture with no face, in a face-like query | Shown as a quiet note under results, not an error: "No face found in this picture, so FrameHound matched how it looks overall." |
 | Index built with different models | "This movie was indexed with older models. Re-index it to search." Button: **Re-index**. |
+| Original file evicted | Search still works. **Cut clip** is replaced by "The movie file was removed to save space. Re-download it to clip." and **Re-download**, which fetches the file again without re-indexing. |
 
 ### 4.4 Export
 
@@ -409,7 +416,8 @@ iPhone sheet                          Desktop (sheet anchored right, 400 px)
   - **Exact**: "cuts on the frame".
   - **Quick**: "instant, may start a moment early".
 - **Crop to the face** appears only for **Same face** candidates. Cropping re-encodes, so while it is checked **Quick** is disabled with the reason inline: "not available when cropping to the face".
-- **GIF up to 15 s.** If the span is longer, the GIF option is disabled with the reason inline: "GIF is limited to 15 seconds. Shorten the clip to use it."
+- **Video with subtitles** ("the dialogue, burned into the picture") appears only when the movie has a transcript. It re-encodes, so **Quick** says "not available with subtitles".
+- **GIF up to 15 s, no sound.** If the span is longer, the GIF option is disabled with the reason inline: "GIF is limited to 15 seconds. Shorten the clip to use it." A GIF is always cut exactly ("not available for a GIF" on **Quick**), and **Clip ready** previews it as an image.
 - **The action keeps one name through the flow:**
   - The button is **Cut clip**.
   - While running, the label changes to **Cutting…** with a china-marker fill sweeping across the button, the one progress bar in this sheet.

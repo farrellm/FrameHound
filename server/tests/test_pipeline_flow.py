@@ -172,5 +172,10 @@ def test_clip_validation(data_dir, client):
         conn.execute("UPDATE movies SET duration_s=4 WHERE id='d4'")
     assert client.post("/movies/d4/clips", json={"start": 0, "end": 200}).json()["code"] == "too_long"
     assert client.post("/movies/d4/clips", json={"start": 2, "end": 2}).json()["code"] == "bad_span"
-    assert client.post("/movies/d4/clips", json={"start": 0, "end": 2, "format": "gif"}
-                       ).json()["code"] == "unsupported_format"
+    assert client.post("/movies/d4/clips", json={"start": 0, "end": 20, "format": "gif"}
+                       ).json()["code"] == "too_long"
+    assert client.post("/movies/d4/clips", json={"start": 0, "end": 2, "format": "gif",
+                                                 "subs": True}).json()["code"] == "bad_format"
+    # No index yet, so no transcript to burn in.
+    assert client.post("/movies/d4/clips", json={"start": 0, "end": 2, "subs": True}
+                       ).json()["code"] == "no_dialogue_index"

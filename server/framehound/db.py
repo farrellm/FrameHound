@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS queries(id TEXT PRIMARY KEY, movie_id TEXT, type TEXT
   image_sha TEXT, created_at REAL, latency_ms REAL);
 CREATE TABLE IF NOT EXISTS clips(id TEXT PRIMARY KEY, movie_id TEXT, start REAL, "end" REAL,
   mode TEXT, format TEXT, path TEXT, job_id TEXT, created_at REAL,
-  crop_box TEXT /* JSON [x, y, w, h], fractions of the frame */);
+  crop_box TEXT /* JSON [x, y, w, h], fractions of the frame */,
+  subs INT DEFAULT 0 /* subtitles burned in */);
 """
 
 _ALPHABET = string.ascii_lowercase + string.digits
@@ -100,6 +101,8 @@ def init() -> None:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(clips)")}
         if "crop_box" not in cols:
             conn.execute("ALTER TABLE clips ADD COLUMN crop_box TEXT")
+        if "subs" not in cols:
+            conn.execute("ALTER TABLE clips ADD COLUMN subs INT DEFAULT 0")
 
 
 def row(conn: sqlite3.Connection, sql: str, *args) -> dict | None:

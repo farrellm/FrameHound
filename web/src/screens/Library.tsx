@@ -26,7 +26,7 @@ export function Library() {
   const [colabBroken, setColabBroken] = useState(false);
   useEffect(() => {
     api.health().then(
-      (h) => setColabBroken(h.colab.state === "auth_broken"),
+      (h) => setColabBroken(h.colab?.state === "auth_broken"),
       () => {},
     );
   }, []);
@@ -102,6 +102,7 @@ function MovieRow({ movie: m }: { movie: Movie }) {
       </>
     );
   else if (m.status === "cancelled") state = <>Indexing stopped</>;
+  else if (m.status === "evicted") state = <>Removed to save space</>;
   else
     state = (
       <span className="num">
@@ -133,11 +134,13 @@ function AddMovie({ onAdded }: { onAdded: () => void }) {
   const { announce } = useAnnouncer();
   const canPaste = typeof navigator.clipboard?.readText === "function";
 
-  async function submit(source: string) {
+  const torrentInput = useRef<HTMLInputElement>(null);
+
+  async function submit(source: string | File) {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.addMovie(source);
+      const r = typeof source === "string" ? await api.addMovie(source) : await api.addTorrent(source);
       if (isCollection(r)) {
         setCollection(r);
       } else {
@@ -190,7 +193,7 @@ function AddMovie({ onAdded }: { onAdded: () => void }) {
             autoCorrect="off"
             spellCheck={false}
             enterKeyHint="go"
-            placeholder="Paste a movie link or archive.org link"
+            placeholder="Paste a movie link or magnet link"
             value={text}
             onChange={(e) => {
               setText(e.target.value);
@@ -223,6 +226,25 @@ function AddMovie({ onAdded }: { onAdded: () => void }) {
             Paste
           </button>
         )}
+        <p className="or-torrent">
+          or{" "}
+          <button type="button" className="btn btn-text" disabled={busy} onClick={() => torrentInput.current?.click()}>
+            choose a .torrent file
+          </button>
+          <input
+            ref={torrentInput}
+            className="visually-hidden"
+            type="file"
+            accept=".torrent,application/x-bittorrent"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) submit(f);
+            }}
+          />
+        </p>
         {error && (
           <div id="add-error" role="alert">
             <p className="message danger">{error.message}</p>

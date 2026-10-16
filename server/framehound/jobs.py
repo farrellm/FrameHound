@@ -98,9 +98,11 @@ class Job:
                 (self.id, stage, self.id, state, pct, eta_s),
             )
             self.conn.execute(
-                "UPDATE jobs SET stage=?, pct=?, eta_s=?, message=COALESCE(?, message), "
-                "heartbeat_at=?, seq=seq+1 WHERE id=?",
-                (stage, pct, eta_s, message, db.now(), self.id),
+                # A stage's note lasts until it gives a new one or another stage reports.
+                "UPDATE jobs SET message=CASE WHEN ? IS NOT NULL THEN ? WHEN stage=? "
+                "THEN message END, stage=?, pct=?, eta_s=?, heartbeat_at=?, seq=seq+1 "
+                "WHERE id=?",
+                (message, message, stage, stage, pct, eta_s, db.now(), self.id),
             )
 
     def stage_done(self, stage: str) -> None:

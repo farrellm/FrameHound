@@ -233,7 +233,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
   const dragIn = (x: number) => setIn(Math.min(Math.max(x, 0), (outPt ?? duration) - frame));
   const dragOut = (x: number) => setOut(Math.max(Math.min(x, duration), (inPt ?? 0) + frame));
 
-  const canCut = inPt != null && outPt != null && outPt > inPt;
+  const canCut = movie.has_source && inPt != null && outPt != null && outPt > inPt;
 
   // Desktop keys, following editing convention.
   const shuttle = useRef({ dir: 0, speed: 0, raf: 0 });
@@ -493,9 +493,28 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             Set out
           </button>
         </div>
-        <button className="btn btn-primary btn-block" disabled={!canCut} onClick={() => setExporting(true)}>
-          Cut clip{canCut ? <span className="num">&nbsp;{fmtShort(outPt! - inPt!)}</span> : null}
-        </button>
+        {movie.has_source ? (
+          <button className="btn btn-primary btn-block" disabled={!canCut} onClick={() => setExporting(true)}>
+            Cut clip{canCut ? <span className="num">&nbsp;{fmtShort(outPt! - inPt!)}</span> : null}
+          </button>
+        ) : (
+          <div className="redownload">
+            <p className="measure">The movie file was removed to save space. Re-download it to clip.</p>
+            <button
+              className="btn btn-primary btn-block"
+              onClick={async () => {
+                try {
+                  await api.retry(movie.id);
+                  onChanged();
+                } catch (e) {
+                  setError(e as ApiError);
+                }
+              }}
+            >
+              Re-download
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="side">

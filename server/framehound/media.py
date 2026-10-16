@@ -12,6 +12,7 @@ from pathlib import Path
 from .config import settings
 from .errors import Cancelled, FHError
 
+VIDEO_EXTS = {".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".mpg", ".mpeg", ".ogv", ".ts"}
 FORMAT_ALLOW = {"mov", "mp4", "m4a", "3gp", "3g2", "mj2", "matroska", "webm", "avi", "mpeg",
                 "mpegts", "ogg", "flv", "asf"}
 VIDEO_CODEC_ALLOW = {"h264", "hevc", "mpeg4", "mpeg2video", "mpeg1video", "vp8", "vp9", "av1",
@@ -92,14 +93,14 @@ def validate(p: Probe, size: int) -> None:
 
 
 def run_ffmpeg(args: list[str], duration_s: float, on_progress: Callable[[float], None],
-               check_cancel: Callable[[], None] = lambda: None) -> None:
+               check_cancel: Callable[[], None] = lambda: None, cwd: Path | None = None) -> None:
     """Run ffmpeg with ``-progress``; report fraction done; kill on cancel."""
     s = settings()
     threads = ["-threads", str(s.ffmpeg_threads)] if s.ffmpeg_threads else []
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-y",
            "-progress", "pipe:1", "-nostats", *threads, *args]
     proc = subprocess.Popen(limited(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True)
+                            text=True, cwd=cwd)
     assert proc.stdout is not None
     try:
         for line in proc.stdout:
@@ -158,18 +159,43 @@ def face_crop(box: list[float], width: int, height: int) -> tuple[int, int, int,
     return w, h, x, y
 
 
+GIF_FPS = 12
+GIF_WIDTH = 480
+
+
 def cut_clip(src: Path, dst: Path, start: float, end: float, mode: str,
-             on_progress, check_cancel, crop: tuple[int, int, int, int] | None = None) -> None:
+             on_progress, check_cancel, crop: tuple[int, int, int, int] | None = None,
+             fmt: str = "mp4", srt: Path | None = None) -> None:
+    """Cut ``[start, end]`` of ``src``: MP4 (stream copy when ``fast``, else
+    re-encoded), MP4 with ``srt`` burned in, or a GIF. Cropping, subtitles and
+    GIF always re-encode."""
     dur = end - start
+    src, dst = src.resolve(), dst.resolve()  # absolute: ffmpeg may run in the srt's dir
     tmp = dst.with_name(dst.stem + ".part" + dst.suffix)
     head = ["-ss", f"{start:.3f}", "-protocol_whitelist", "file", "-i", str(src),
-            "-t", f"{dur:.3f}", "-map", "0:v:0", "-map", "0:a:0?"]
-    if mode == "fast" and crop is None:
+            "-t", f"{dur:.3f}"]
+    filters = ["crop={}:{}:{}:{}".format(*crop)] if crop else []
+    if fmt == "gif":
+        # One pass: the palette is computed over the clip, then applied to it.
+        chain = ",".join([*filters, f"fps={GIF_FPS}",
+                          f"scale='min({GIF_WIDTH},iw)':-2:flags=lanczos"])
+        graph = (f"[0:v:0]{chain},split[a][b];[a]palettegen=stats_mode=diff[p];"
+                 "[b][p]paletteuse=dither=sierra2_4a")
+        run_ffmpeg([*head, "-filter_complex", graph, "-an", "-loop", "0", "-f", "gif",
+                    str(tmp)], dur, on_progress, check_cancel)
+        tmp.replace(dst)
+        return
+    head += ["-map", "0:v:0", "-map", "0:a:0?"]
+    if srt is not None:
+        # Run from the srt's directory: its server-derived name needs no filter escaping.
+        filters.append(f"subtitles=filename={srt.name}:"
+                       "force_style='FontSize=14,Outline=1.5,MarginV=16'")
+    if mode == "fast" and not filters:
         body = ["-c", "copy", "-avoid_negative_ts", "make_zero"]
     else:
-        vf = ["-vf", "crop={}:{}:{}:{}".format(*crop)] if crop else []
+        vf = ["-vf", ",".join(filters)] if filters else []
         body = [*vf, "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "160k"]
     run_ffmpeg([*head, *body, "-movflags", "+faststart", str(tmp)], dur, on_progress,
-               check_cancel)
+               check_cancel, cwd=srt.parent if srt is not None else None)
     tmp.replace(dst)

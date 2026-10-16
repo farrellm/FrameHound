@@ -1,3 +1,5 @@
+import base64
+
 import httpx
 import pytest
 from conftest import fixture_json
@@ -109,7 +111,44 @@ def test_http_video_and_html():
     assert e.value.code == "not_video"
 
 
-def test_magnet_not_yet_supported():
+def test_magnet():
+    h = "0123456789abcdef0123456789abcdef01234567"
+    res = SourceResolver().resolve(f"magnet:?xt=urn:btih:{h}&dn=Detour.1945.mp4")
+    assert (res.kind, res.url.startswith("magnet:"), res.filename) == ("torrent", True, None)
+    assert res.source_ref == f"btih:{h}" and res.title == "Detour.1945"
+    # Base32 hashes name the same torrent.
+    b32 = base64.b32encode(bytes.fromhex(h)).decode()
+    assert SourceResolver().resolve(f"magnet:?xt=urn:btih:{b32}").source_ref == f"btih:{h}"
+    for bad in ("magnet:?dn=nohash", "magnet:?xt=urn:btih:zz"):
+        with pytest.raises(FHError) as e:
+            SourceResolver().resolve(bad)
+        assert e.value.code == "unrecognized"
+
+
+def _torrent(tmp_path, files: dict[str, int]) -> bytes:
+    import libtorrent as lt
+
+    root = tmp_path / "pack"
+    for name, size in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_bytes(b"x" * size)
+    ct = lt.create_torrent(lt.list_files(str(root)), 16384)
+    lt.set_piece_hashes(ct, str(tmp_path))
+    return lt.bencode(ct.generate())
+
+
+def test_torrent_file_picks_largest_video(tmp_path):
+    data = _torrent(tmp_path, {"sample.mkv": 1000, "Feature.mp4": 5000, "extras.txt": 9000})
+    res = SourceResolver.resolve_torrent_file(data)
+    assert (res.kind, res.url, res.filename, res.expected_size) == ("torrent", None,
+                                                                    "source.mp4", 5000)
+    assert res.source_ref.startswith("btih:") and res.title == "pack"
+
+
+def test_torrent_file_without_video(tmp_path):
     with pytest.raises(FHError) as e:
-        SourceResolver().resolve("magnet:?xt=urn:btih:0123")
-    assert e.value.code == "unsupported_source"
+        SourceResolver.resolve_torrent_file(_torrent(tmp_path, {"notes.txt": 100}))
+    assert e.value.code == "no_video"
+    with pytest.raises(FHError) as e:
+        SourceResolver.resolve_torrent_file(b"not bencoded")
+    assert e.value.code == "bad_torrent"

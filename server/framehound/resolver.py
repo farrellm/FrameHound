@@ -1,7 +1,7 @@
 """SourceResolver: turn what the user pasted into something downloadable.
 
-M1 handles archive.org (items and collections) and plain HTTP(S).
-Magnet links and .torrent files arrive in M4.
+archive.org (items and collections), plain HTTP(S), magnet links and
+.torrent files. Torrents are downloaded by ``torrent.py`` on the host.
 """
 
 from __future__ import annotations
@@ -12,9 +12,10 @@ from pathlib import PurePosixPath
 from urllib.parse import quote, unquote, urlencode, urlsplit
 
 from .errors import FHError
+from .media import VIDEO_EXTS
 from .safe_http import SafeClient
+from .torrent import info_hash, parse_magnet, parse_torrent, pick_video
 
-VIDEO_EXTS = {".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".mpg", ".mpeg", ".ogv", ".ts"}
 CONTENT_TYPE_EXT = {
     "video/mp4": ".mp4", "video/x-m4v": ".m4v", "video/webm": ".webm",
     "video/x-matroska": ".mkv", "video/quicktime": ".mov", "video/x-msvideo": ".avi",
@@ -39,9 +40,9 @@ UNRECOGNIZED = ("That isn't a web address or magnet link. "
 
 @dataclass
 class ResolvedSource:
-    kind: str  # archive | http
-    url: str
-    filename: str  # server-derived, e.g. source.mp4
+    kind: str  # archive | http | torrent
+    url: str | None  # a magnet link for torrents (None for a .torrent file)
+    filename: str | None  # server-derived, e.g. source.mp4; None until a magnet's metadata
     source_ref: str  # canonical form, used to spot duplicates
     title: str | None = None
     expected_size: int | None = None
@@ -74,8 +75,7 @@ class SourceResolver:
     def resolve(self, text: str) -> ResolvedSource | Collection:
         kind = classify(text)
         if kind == "magnet":
-            raise FHError("unsupported_source", "Magnet links aren't supported yet. "
-                          "Paste a web or archive.org link instead.")
+            return self.resolve_magnet(text.strip())
         if kind == "unknown":
             raise FHError("unrecognized", UNRECOGNIZED)
         if kind == "archive":
@@ -161,6 +161,27 @@ class SourceResolver:
                           "index. Try a link to a single item.", detail=f"collection {identifier}")
         return coll
 
+    # BitTorrent ------------------------------------------------------------
+
+    @staticmethod
+    def resolve_magnet(uri: str) -> ResolvedSource:
+        p = parse_magnet(uri)
+        return ResolvedSource(kind="torrent", url=uri, filename=None,
+                              source_ref=f"btih:{info_hash(p.info_hashes)}",
+                              title=_title(p.name))
+
+    @staticmethod
+    def resolve_torrent_file(data: bytes) -> ResolvedSource:
+        ti = parse_torrent(data)
+        f = pick_video(ti)
+        if f is None:
+            raise FHError("no_video", "This torrent has no movie file FrameHound can index.",
+                          detail=f"{ti.num_files()} files, none with a video extension")
+        return ResolvedSource(kind="torrent", url=None, filename=f"source{f.ext}",
+                              source_ref=f"btih:{info_hash(ti.info_hashes())}",
+                              title=_title(ti.name()),
+                              expected_size=f.size)
+
     # plain HTTP ------------------------------------------------------------
 
     def resolve_http(self, url: str) -> ResolvedSource:
@@ -185,6 +206,14 @@ class SourceResolver:
         name = unquote(PurePosixPath(urlsplit(final).path).stem) or None
         return ResolvedSource(kind="http", url=final, filename=f"source{ext}", source_ref=url,
                               title=name, expected_size=int(size) if size else None)
+
+
+def _title(name: str | None) -> str | None:
+    """A torrent's name, without a video file's extension."""
+    if not name:
+        return None
+    p = PurePosixPath(name)
+    return p.stem if p.suffix.lower() in VIDEO_EXTS else name
 
 
 def _first(v):

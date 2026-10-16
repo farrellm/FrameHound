@@ -316,6 +316,20 @@ details.tech pre {
   gap: 8px;
 }
 
+.redownload p {
+  margin: 0 0 8px;
+}
+
+.or-torrent {
+  margin: 0;
+  color: var(--fog);
+}
+
+.or-torrent .btn-text {
+  min-height: var(--tap);
+  font-size: inherit;
+}
+
 .paste-chip {
   justify-self: start;
   min-height: 36px;
@@ -575,6 +589,11 @@ legend {
 }
 
 .stage .state {
+  font-size: var(--t-1);
+}
+
+.stage .stage-note {
+  grid-column: 2 / 4;
   font-size: var(--t-1);
 }
 
@@ -1072,6 +1091,7 @@ legend {
   width: 100%;
   background: #000;
   aspect-ratio: 16 / 9;
+  object-fit: contain;
   display: block;
   margin: 12px 0;
 }

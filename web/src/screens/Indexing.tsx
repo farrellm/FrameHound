@@ -6,7 +6,7 @@ import { ErrorDetails } from "../components/ErrorDetails";
 import { Sheet } from "../components/Sheet";
 import { fmtMinutesLeft } from "../format";
 import { navigate } from "../router";
-import { groupStages } from "../stages";
+import { activeLabel, groupStages } from "../stages";
 
 export function Indexing({ movie, onChanged }: { movie: Movie; onChanged: () => void }) {
   const [snap, setSnap] = useState<IndexProgress | null>(null);
@@ -95,6 +95,7 @@ export function Indexing({ movie, onChanged }: { movie: Movie; onChanged: () => 
 
   const failed = movie.status === "failed";
   const cancelled = movie.status === "cancelled";
+  const evicted = movie.status === "evicted";
   const job = snap?.job;
   const isLocal = !snap?.gpu || snap.gpu === "local";
 
@@ -116,7 +117,7 @@ export function Indexing({ movie, onChanged }: { movie: Movie; onChanged: () => 
 
   return (
     <div className="indexing">
-      <section aria-label="Indexing progress">
+      <section aria-label="Indexing progress" hidden={evicted}>
         {!snap && <p className="fog">Loading progress…</p>}
         <ol className="stages">
           {groups.map((g, i) => (
@@ -135,6 +136,9 @@ export function Indexing({ movie, onChanged }: { movie: Movie; onChanged: () => 
                       ? "failed"
                       : ""}
               </span>
+              {g.state === "running" && job?.note && activeLabel(job.stage, null) === g.label && (
+                <span className="stage-note fog">{job.note}</span>
+              )}
               {g.state === "running" && (
                 <span className="bar" aria-hidden="true">
                   <span style={{ width: `${Math.max(2, g.pct * 100)}%` }} />
@@ -191,7 +195,32 @@ export function Indexing({ movie, onChanged }: { movie: Movie; onChanged: () => 
             </div>
           </div>
         )}
-        {!failed && !cancelled && (
+        {evicted && (
+          <div>
+            <h2>Removed to save space.</h2>
+            <p className="measure">
+              FrameHound removed this movie's files to stay under its disk limit. Re-download it to search and clip
+              again. It's indexed again too.
+            </p>
+            <div className="sheet-actions">
+              <button className="btn btn-primary" onClick={() => act(() => api.retry(movie.id))}>
+                Re-download
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() =>
+                  act(async () => {
+                    await api.remove(movie.id);
+                    navigate("/", { replace: true });
+                  })
+                }
+              >
+                Remove movie
+              </button>
+            </div>
+          </div>
+        )}
+        {!failed && !cancelled && !evicted && (
           <>
             {leaveNote}
             <p className="fog">

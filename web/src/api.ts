@@ -24,10 +24,19 @@ export interface Job {
   compute_units_used: number | null;
   seq: number;
   detail: string | null;
+  /** What a running stage is waiting on, like "3 peers". */
+  note?: string | null;
   stages?: Stage[];
 }
 
-export type MovieStatus = "ingesting" | "indexing" | "ready" | "failed" | "cancelled" | "merged";
+export type MovieStatus =
+  | "ingesting"
+  | "indexing"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "merged"
+  | "evicted";
 
 export interface Movie {
   id: string;
@@ -35,6 +44,7 @@ export interface Movie {
   status: MovieStatus;
   error: string | null;
   merged_into: string | null;
+  source_kind: string | null;
   duration_s: number | null;
   width: number | null;
   height: number | null;
@@ -86,8 +96,10 @@ export interface Shot {
 }
 
 export interface Health {
-  colab: { state: "ok" | "auth_broken" | "error" | "not_configured"; balance_cu?: number; error?: string };
-  index_backend: string;
+  colab?: { state: "ok" | "auth_broken" | "error" | "not_configured"; balance_cu?: number; error?: string };
+  index_backend?: string;
+  auth_required: boolean;
+  signed_in: boolean;
 }
 
 export interface SearchResult {
@@ -117,9 +129,13 @@ export interface Clip {
   end: number;
   ready: boolean;
   crop: boolean;
+  subs: boolean;
+  format: ClipFormat;
   file_url: string;
   job: Job | null;
 }
+
+export type ClipFormat = "mp4" | "gif";
 
 export class ApiError extends Error {
   code: string;
@@ -136,6 +152,14 @@ export class ApiError extends Error {
 }
 
 const BASE = "/api";
+
+// A 401 from any call means FH_TOKEN is set and this browser hasn't signed in.
+type AuthListener = () => void;
+const authListeners = new Set<AuthListener>();
+export function onSignedOut(fn: AuthListener): () => void {
+  authListeners.add(fn);
+  return () => authListeners.delete(fn);
+}
 
 // The api returns media paths relative to itself; the SPA reaches it under /api.
 const media = (u: string) => (u.startsWith("/") ? BASE + u : u);
@@ -164,6 +188,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   }
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.code === "auth_required") authListeners.forEach((fn) => fn());
   if (!res.ok) throw new ApiError(res.status, data);
   return data as T;
 }
@@ -177,6 +202,12 @@ export const api = {
   health: () => req<Health>("GET", "/health"),
   addMovie: (source: string) =>
     req<{ movie_id: string; job_id: string } | CollectionResult>("POST", "/movies", { source }),
+  addTorrent: (file: File) => {
+    const form = new FormData();
+    form.set("torrent", file, file.name);
+    return req<{ movie_id: string; job_id: string }>("POST", "/movies", form);
+  },
+  signIn: (token: string) => req<{ ok: boolean }>("POST", "/auth", { token }),
   collection: (id: string, q: string) =>
     req<CollectionResult>("GET", `/collections/${encodeURIComponent(id)}?q=${encodeURIComponent(q)}`),
   retry: (id: string) => req<{ job_id: string }>("POST", `/movies/${id}/retry`),
@@ -194,9 +225,16 @@ export const api = {
   },
   cutClip: (
     id: string,
-    body: { start: number; end: number; mode: "accurate" | "fast"; crop?: boolean; face_bbox?: number[] },
-  ) =>
-    req<{ clip_id: string; job_id: string }>("POST", `/movies/${id}/clips`, { ...body, format: "mp4" }),
+    body: {
+      start: number;
+      end: number;
+      mode: "accurate" | "fast";
+      format: ClipFormat;
+      subs?: boolean;
+      crop?: boolean;
+      face_bbox?: number[];
+    },
+  ) => req<{ clip_id: string; job_id: string }>("POST", `/movies/${id}/clips`, body),
   clip: (id: string) => req<Clip>("GET", `/clips/${id}`),
   cancel: (jobId: string) => req<void>("POST", `/jobs/${jobId}/cancel`),
 };

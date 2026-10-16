@@ -67,6 +67,22 @@ class Settings:
     colab_poll_s: float = field(default_factory=lambda: _float("COLAB_POLL_S", 10))
     colab_retries: int = field(default_factory=lambda: _int("COLAB_RETRIES", 2))
     reconcile_s: int = field(default_factory=lambda: _int("RECONCILE_S", 900))
+    # Torrents (design.md §4): host only, the main video file only.
+    seed_ratio: float = field(default_factory=lambda: _float("SEED_RATIO", 0))
+    seed_max_s: int = field(default_factory=lambda: _int("SEED_MAX_S", 3600))
+    torrent_stall_s: float = field(default_factory=lambda: _float("TORRENT_STALL_S", 600))
+    torrent_listen: str = field(default_factory=lambda: _env(
+        "TORRENT_LISTEN", "0.0.0.0:6881,[::]:6881"))
+    max_torrent_kb: int = field(default_factory=lambda: _int("MAX_TORRENT_KB", 2048))
+    # Dev/test only: peers every torrent download connects to ("host:port,...").
+    torrent_peers: tuple[str, ...] = field(default_factory=lambda: tuple(
+        p.strip() for p in _env("FH_TORRENT_PEERS", "").split(",") if p.strip()))
+    # Clips.
+    max_gif_s: float = field(default_factory=lambda: _float("MAX_GIF_S", 15))
+    # Disk quota for movies/ in GB; 0 = none. LRU eviction (design.md §10).
+    max_data_gb: float = field(default_factory=lambda: _float("MAX_DATA_GB", 0))
+    # Shared bearer token; empty = no auth (bind to localhost only).
+    token: str = field(default_factory=lambda: _env("FH_TOKEN", ""))
 
     @property
     def db_path(self) -> Path:

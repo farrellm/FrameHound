@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -16,15 +17,16 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from framehound_indexer import bundle, load_lock
 from pydantic import BaseModel, Field
 
-from . import db, jobs, queue, tasks
+from . import db, evict, jobs, queue, tasks
 from .config import settings
 from .errors import FHError
 from .resolver import Collection, SourceResolver
 from .search import dialogue, faces, visual
+from .torrent import TORRENT_FILE
 
 log = logging.getLogger("framehound.api")
 
@@ -69,11 +71,16 @@ def _colab_forever() -> None:
 
 
 def _gc_clips_forever() -> None:
+    time.sleep(60)  # let startup (and a worker's recovery) settle first
     while True:
         try:
             gc_clips()
         except Exception:
             log.exception("clip gc failed")
+        try:
+            evict.enforce_quota()
+        except Exception:
+            log.exception("eviction failed")
         time.sleep(3600)
 
 
@@ -114,6 +121,70 @@ app = FastAPI(title="FrameHound", version="0.1.0", lifespan=lifespan)
 @app.exception_handler(FHError)
 async def fh_error(_: Request, exc: FHError):
     return JSONResponse(exc.to_dict(), status_code=exc.status)
+
+
+# auth -------------------------------------------------------------------------------
+#
+# With FH_TOKEN set, every request needs it, as a bearer token or as the cookie
+# POST /auth sets. The cookie is what lets <video>, <img>, EventSource and clip
+# links through, since they can't send headers. It holds an HMAC of the token,
+# so changing FH_TOKEN signs every browser out.
+
+AUTH_COOKIE = "fh_auth"
+OPEN_PATHS = {"/health", "/auth"}
+
+
+def _cookie_value(token: str) -> str:
+    return hmac.new(token.encode(), b"framehound-session", hashlib.sha256).hexdigest()
+
+
+def _authorized(request: Request, token: str) -> bool:
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer ") and \
+            hmac.compare_digest(header[7:].strip().encode(), token.encode()):
+        return True
+    cookie = request.cookies.get(AUTH_COOKIE, "")
+    return bool(cookie) and hmac.compare_digest(cookie.encode(),
+                                                _cookie_value(token).encode())
+
+
+AUTH_REQUIRED = {"code": "auth_required",
+                 "message": "This FrameHound needs its access token to open."}
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    token = settings().token
+    if token and request.url.path not in OPEN_PATHS and not _authorized(request, token):
+        return JSONResponse(AUTH_REQUIRED, status_code=401)
+    return await call_next(request)
+
+
+class SignIn(BaseModel):
+    token: str = Field(min_length=1, max_length=1000)
+
+
+@app.post("/auth")
+async def sign_in(body: SignIn, request: Request):
+    token = settings().token
+    if not token:
+        return {"ok": True, "auth_required": False}
+    if not hmac.compare_digest(body.token.strip().encode(), token.encode()):
+        await asyncio.sleep(1)  # slows guessing
+        raise FHError("bad_token", "That token isn't right. It's FH_TOKEN in the server's "
+                      ".env.", status=401)
+    resp = JSONResponse({"ok": True, "auth_required": True})
+    https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    resp.set_cookie(AUTH_COOKIE, _cookie_value(token), max_age=400 * 86400, httponly=True,
+                    samesite="lax", secure=https, path="/")
+    return resp
+
+
+@app.delete("/auth", status_code=204)
+def sign_out():
+    resp = Response(status_code=204)
+    resp.delete_cookie(AUTH_COOKIE, path="/")
+    return resp
 
 
 def _not_found(what: str = "movie") -> FHError:
@@ -157,6 +228,8 @@ def _job_out(j: dict, stages: list[dict] | None = None) -> dict:
     out = {k: j[k] for k in ("id", "movie_id", "kind", "state", "stage", "pct", "eta_s",
                              "error", "error_code", "gpu", "compute_units_used", "seq")}
     out["detail"] = j["message"] if j["state"] == "failed" else None
+    # What a running stage is waiting on ("3 peers", "Waiting for another movie's GPU").
+    out["note"] = j["message"] if j["state"] == "running" else None
     if stages is not None:
         out["stages"] = stages
     return out
@@ -185,8 +258,10 @@ def _get_movie(conn, movie_id: str) -> dict:
 # health ---------------------------------------------------------------------------
 
 @app.get("/health")
-def health():
+def health(request: Request):
     s = settings()
+    if s.token and not _authorized(request, s.token):
+        return {"ok": True, "auth_required": True, "signed_in": False}
     du = shutil.disk_usage(s.data_dir) if s.data_dir.exists() else None
     return {
         "ok": True,
@@ -198,6 +273,8 @@ def health():
         "visual_encoder": _visual_state,
         "face_encoder": _face_state,
         "models_lock_hash": load_lock().hash,
+        "auth_required": bool(s.token), "signed_in": True,
+        "quota_bytes": int(s.max_data_gb * 1024**3) if s.max_data_gb > 0 else None,
     }
 
 
@@ -241,13 +318,29 @@ def list_movies():
 async def add_movie(request: Request):
     ctype = request.headers.get("content-type", "")
     if ctype.startswith("multipart/"):
-        raise FHError("unsupported_source", ".torrent files aren't supported yet. "
-                      "Paste a web or archive.org link instead.")
+        limit = settings().max_torrent_kb * 1024
+        too_big = FHError("bad_torrent", "That file is too large to be a .torrent file.",
+                          status=413)
+        if int(request.headers.get("content-length") or 0) > limit + 65536:
+            raise too_big
+        form = await request.form(max_files=1)
+        upload = form.get("torrent")
+        if upload is None or isinstance(upload, str):
+            raise FHError("bad_torrent", "Choose a .torrent file to add.")
+        data = await upload.read(limit + 1)
+        if len(data) > limit:
+            raise too_big
+        return await run_in_threadpool(_add_torrent_file, data)
     try:
         body = AddMovie.model_validate(await request.json())
     except Exception as e:
         raise FHError("unrecognized", "Paste a link to a movie.", detail=str(e)) from e
     return await run_in_threadpool(_add_movie, body.source.strip())
+
+
+def _add_torrent_file(data: bytes):
+    res = SourceResolver.resolve_torrent_file(data)
+    return _create_movie(res, torrent=data)
 
 
 def _add_movie(source: str):
@@ -258,6 +351,10 @@ def _add_movie(source: str):
         resolver.client.close()
     if isinstance(res, Collection):
         return JSONResponse(_collection_out(res), status_code=200)
+    return _create_movie(res)
+
+
+def _create_movie(res, torrent: bytes | None = None):
     with db.db() as conn, db.tx(conn):
         dup = db.row(conn, "SELECT id FROM movies WHERE source_ref=? AND status<>'merged'",
                      res.source_ref)
@@ -272,6 +369,10 @@ def _add_movie(source: str):
             (movie_id, res.title, res.kind, res.source_ref, res.url, res.md5, res.filename,
              res.expected_size, "ingesting", db.now(), db.now()),
         )
+        if torrent is not None:
+            mdir = settings().movie_dir(movie_id)
+            mdir.mkdir(parents=True, exist_ok=True)
+            (mdir / TORRENT_FILE).write_bytes(torrent)
         job_id = tasks.start_ingest(conn, movie_id)
     queue.enqueue("ingest", job_id)
     return {"movie_id": movie_id, "job_id": job_id}
@@ -357,7 +458,10 @@ def index_progress(movie_id: str):
             if j:
                 stages += [{**st, "job": kind} for st in _stages(conn, j["id"])]
             elif kind == "index":
-                stages += [{"stage": st, "state": "pending", "pct": 0, "eta_s": None,
+                # A re-download keeps its index: those stages are already done.
+                done = tasks.has_current_index(movie_id)
+                stages += [{"stage": st, "state": "done" if done else "pending",
+                            "pct": 1 if done else 0, "eta_s": 0 if done else None,
                             "job": "index"} for st in get_backend().planned_stages()]
             else:
                 stages += [{"stage": st, "state": "done", "pct": 1, "eta_s": 0, "job": "ingest"}
@@ -574,9 +678,9 @@ class ClipBody(BaseModel):
 @app.post("/movies/{movie_id}/clips", status_code=201)
 def make_clip(movie_id: str, body: ClipBody):
     s = settings()
-    if body.format != "mp4" or body.subs:
-        raise FHError("unsupported_format", "GIF and subtitles arrive in a later version. "
-                      "Cut a plain video clip for now.")
+    if body.subs and body.format != "mp4":
+        raise FHError("bad_format", "Subtitles are only for video clips. Choose Video with "
+                      "subtitles.")
     crop_box = None
     if body.crop:
         b = body.face_bbox
@@ -584,14 +688,20 @@ def make_clip(movie_id: str, body: ClipBody):
                 or b[0] + b[2] > 1.001 or b[1] + b[3] > 1.001:
             raise FHError("bad_crop", "Crop to the face needs a face. Pick a Same face match.")
         crop_box = json.dumps([round(v, 5) for v in b])
-    # Cropping re-encodes, so it is always exact.
-    mode = "accurate" if crop_box else body.mode
+    # Cropping, subtitles and GIF all re-encode, so they are always exact.
+    mode = "accurate" if crop_box or body.subs or body.format == "gif" else body.mode
     dur = body.end - body.start
     if dur < 0.1:
         raise FHError("bad_span", "Set an out point after the in point.")
     if dur > s.max_clip_s + 1e-6:
         raise FHError("too_long", f"Clips are limited to {s.max_clip_s:g} seconds. "
                       "Move the in or out point.")
+    if body.format == "gif" and dur > s.max_gif_s + 1e-6:
+        raise FHError("too_long", f"GIF is limited to {s.max_gif_s:g} seconds. Shorten the "
+                      "clip to use it.")
+    if body.subs and "dialogue" not in set((_manifest(movie_id) or {}).get("contents", [])):
+        raise FHError("no_dialogue_index", "This movie has no transcript, so it can't have "
+                      "subtitles. Cut a plain video clip.", status=409)
     with db.db() as conn, db.tx(conn):
         m = _get_movie(conn, movie_id)
         if m["duration_s"] and body.end > m["duration_s"] + 0.5:
@@ -602,9 +712,9 @@ def make_clip(movie_id: str, body: ClipBody):
         job_id = jobs.create(conn, movie_id, "clip", ["cutting"])
         clip_id = db.new_id()
         conn.execute('INSERT INTO clips(id, movie_id, start, "end", mode, format, job_id, '
-                     "created_at, crop_box) VALUES (?,?,?,?,?,?,?,?,?)",
+                     "created_at, crop_box, subs) VALUES (?,?,?,?,?,?,?,?,?,?)",
                      (clip_id, movie_id, body.start, min(body.end, m["duration_s"] or body.end),
-                      mode, body.format, job_id, db.now(), crop_box))
+                      mode, body.format, job_id, db.now(), crop_box, int(body.subs)))
     queue.enqueue("clip", job_id)
     return {"clip_id": clip_id, "job_id": job_id}
 
@@ -623,7 +733,7 @@ def get_clip(clip_id: str):
         j = db.row(conn, "SELECT * FROM jobs WHERE id=?", c["job_id"])
     return {"id": c["id"], "movie_id": c["movie_id"], "start": c["start"], "end": c["end"],
             "mode": c["mode"], "format": c["format"], "ready": bool(c["path"]),
-            "crop": bool(c["crop_box"]),
+            "crop": bool(c["crop_box"]), "subs": bool(c["subs"]),
             "file_url": f"/clips/{c['id']}/file", "job": _job_out(j) if j else None}
 
 

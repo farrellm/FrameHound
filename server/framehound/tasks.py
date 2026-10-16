@@ -9,7 +9,7 @@ import time
 
 from framehound_indexer import load_lock
 
-from . import db, jobs, queue
+from . import db, evict, jobs, queue
 from .colab import SESSION_PREFIX, ColabCli, ColabError
 from .config import settings
 from .download import download, sha256_file
@@ -18,6 +18,8 @@ from .importer import import_bundle
 from .index_backend import SessionLost, get_backend
 from .media import cut_clip, face_crop, ffprobe, transcode_proxy, validate
 from .safe_http import SafeClient
+from .subtitles import clip_srt
+from .torrent import download_torrent
 
 log = logging.getLogger("framehound.tasks")
 
@@ -63,23 +65,42 @@ def run_ingest(job_id: str) -> None:
         m = _movie(conn, mid)
         mdir = settings().movie_dir(mid)
         mdir.mkdir(parents=True, exist_ok=True)
-        src = mdir / m["source_file"]
+        # A movie whose source was evicted keeps its index: re-download, check it's
+        # the same file, and return to ready without indexing again.
+        redownload = bool(m["sha256"]) and has_current_index(mid)
+        src = mdir / m["source_file"] if m["source_file"] else None
 
-        if src.exists():
+        if src is not None and src.exists():
             job.skip("downloading")
         else:
             job.stage("downloading", 0.0, force=True)
+            evict.enforce_quota(protect={mid}, need=int(m["bytes"] or 0))
             t0 = time.monotonic()
 
-            def on_dl(frac: float, done: int, total: int) -> None:
-                eta = None
-                if frac > 0.01:
-                    eta = round((time.monotonic() - t0) * (1 - frac) / frac)
-                job.stage("downloading", frac, eta)
+            def eta(frac: float) -> float | None:
+                return round((time.monotonic() - t0) * (1 - frac) / frac) if frac > 0.01 \
+                    else None
 
-            with SafeClient() as client:
-                download(client, m["source_url"], src, m["bytes"], m["source_md5"], on_dl,
-                         job.check_cancel)
+            if m["source_kind"] == "torrent":
+                def on_file(f) -> str:
+                    name = f"source{f.ext}"
+                    _set_movie(conn, mid, source_file=name, bytes=f.size)
+                    return name
+
+                def on_tor(frac: float, done: int, total: int, peers: int) -> None:
+                    note = f"{peers} peer{'' if peers == 1 else 's'}" if total \
+                        else "Finding peers"
+                    job.stage("downloading", frac, eta(frac), message=note)
+
+                src = download_torrent(mdir, m["source_url"], on_file, on_tor,
+                                       job.check_cancel)
+            else:
+                assert src is not None
+                with SafeClient() as client:
+                    download(client, m["source_url"], src, m["bytes"], m["source_md5"],
+                             lambda frac, done, total: job.stage("downloading", frac,
+                                                                 eta(frac)),
+                             job.check_cancel)
             job.stage_done("downloading")
 
         job.stage("probing", 0.0, force=True)
@@ -88,12 +109,20 @@ def run_ingest(job_id: str) -> None:
         validate(probe, size)
         sha = sha256_file(src)
         job.check_cancel(force=True)
-        target = _dedup(conn, mid, sha)
-        if target:
-            _set_movie(conn, mid, status="merged", merged_into=target)
-            job.finish(message=f"merged into {target}")
-            shutil.rmtree(mdir, ignore_errors=True)
-            return
+        if redownload:
+            if sha != m["sha256"]:
+                src.unlink(missing_ok=True)
+                raise FHError("download_failed", "The downloaded file isn't the one this "
+                              "movie was indexed from, so FrameHound can't clip from it. "
+                              "Remove the movie and add it again.",
+                              detail=f"sha256 {sha} != {m['sha256']}")
+        else:
+            target = _dedup(conn, mid, sha)
+            if target:
+                _set_movie(conn, mid, status="merged", merged_into=target)
+                job.finish(message=f"merged into {target}")
+                shutil.rmtree(mdir, ignore_errors=True)
+                return
         _set_movie(conn, mid, sha256=sha, duration_s=probe.duration_s, width=probe.width,
                    height=probe.height, fps=probe.fps, bytes=size)
         job.stage_done("probing")
@@ -111,7 +140,12 @@ def run_ingest(job_id: str) -> None:
 
             transcode_proxy(src, proxy, probe.duration_s, on_tx, job.check_cancel)
             job.stage_done("transcoding_proxy")
+        evict.enforce_quota(protect={mid})
 
+        if redownload:
+            _set_movie(conn, mid, status="ready", error=None, last_accessed_at=db.now())
+            job.finish(message="re-downloaded")
+            return
         with db.tx(conn):
             index_job = start_index(conn, mid)
         job.finish()
@@ -124,6 +158,16 @@ def run_ingest(job_id: str) -> None:
         _set_movie(conn, mid, status="failed", error=err.message)
     finally:
         job.close()
+
+
+def has_current_index(movie_id: str) -> bool:
+    from framehound_indexer import bundle
+
+    p = settings().movie_dir(movie_id) / "index" / bundle.MANIFEST
+    try:
+        return json.loads(p.read_text()).get("models_lock_hash") == load_lock().hash
+    except (OSError, ValueError):
+        return False
 
 
 def _dedup(conn, movie_id: str, sha: str) -> str | None:
@@ -364,8 +408,17 @@ def run_clip(job_id: str) -> None:
                 raise FHError("bad_crop", "FrameHound doesn't know this movie's frame size, "
                               "so it can't crop. Cut without cropping.")
             crop = face_crop(json.loads(clip["crop_box"]), int(m["width"]), int(m["height"]))
-        cut_clip(src, out, clip["start"], clip["end"], clip["mode"],
-                 lambda f: job.stage("cutting", f), job.check_cancel, crop=crop)
+        srt = None
+        if clip["subs"]:
+            srt = out.with_suffix(".srt")
+            srt.write_text(clip_srt(conn, m["id"], clip["start"], clip["end"]))
+        try:
+            cut_clip(src, out, clip["start"], clip["end"], clip["mode"],
+                     lambda f: job.stage("cutting", f), job.check_cancel, crop=crop,
+                     fmt=clip["format"], srt=srt)
+        finally:
+            if srt is not None:
+                srt.unlink(missing_ok=True)
         conn.execute("UPDATE clips SET path=? WHERE id=?", (str(out), clip["id"]))
         job.stage_done("cutting")
         job.finish()

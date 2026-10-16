@@ -6,6 +6,11 @@ import { ErrorDetails } from "../components/ErrorDetails";
 import { Sheet } from "../components/Sheet";
 import { fmtLength, fmtPrecise } from "../format";
 
+type Format = "mp4" | "subs" | "gif";
+
+/** GIF's length limit (MAX_GIF_S on the server). */
+const GIF_MAX_S = 15;
+
 type Phase =
   | { kind: "choose" }
   | { kind: "cutting"; pct: number }
@@ -27,10 +32,21 @@ export function ExportSheet({
   onClose: () => void;
 }) {
   const fps = movie.fps || 24;
+  const len = end - start;
+  const gifTooLong = len > GIF_MAX_S + 1e-6;
+  const [format, setFormat] = useState<Format>("mp4");
   const [mode, setMode] = useState<"accurate" | "fast">("accurate");
   const [crop, setCrop] = useState(false);
-  // Cropping re-encodes, so it always cuts exactly.
-  const effectiveMode = crop ? "accurate" : mode;
+  // Cropping, subtitles and GIF all re-encode, so they always cut exactly.
+  const quickReason = crop
+    ? "not available when cropping to the face"
+    : format === "subs"
+      ? "not available with subtitles"
+      : format === "gif"
+        ? "not available for a GIF"
+        : null;
+  const effectiveMode = quickReason ? "accurate" : mode;
+  const ext = format === "gif" ? "gif" : "mp4";
   const [phase, setPhase] = useState<Phase>({ kind: "choose" });
   const [file, setFile] = useState<File | null>(null);
   const stop = useRef<() => void>(undefined);
@@ -40,7 +56,7 @@ export function ExportSheet({
       .replace(/[^A-Za-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       .slice(0, 60) || "clip"
-  }-${fmtPrecise(start, fps).replace(/[:.]/g, "-")}.mp4`;
+  }-${fmtPrecise(start, fps).replace(/[:.]/g, "-")}.${ext}`;
 
   useEffect(() => () => stop.current?.(), []);
 
@@ -52,6 +68,8 @@ export function ExportSheet({
         start,
         end,
         mode: effectiveMode,
+        format: format === "gif" ? "gif" : "mp4",
+        subs: format === "subs",
         ...(crop && faceBox ? { crop: true, face_bbox: faceBox } : {}),
       });
       stop.current = followJob(job_id, (j) => {
@@ -83,12 +101,12 @@ export function ExportSheet({
     let live = true;
     fetch(clipFileUrl(clipId))
       .then((r) => r.blob())
-      .then((b) => live && setFile(new File([b], fileName, { type: "video/mp4" })))
+      .then((b) => live && setFile(new File([b], fileName, { type: ext === "gif" ? "image/gif" : "video/mp4" })))
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [clipId, fileName]);
+  }, [clipId, fileName, ext]);
 
   const share =
     typeof navigator.canShare === "function" &&
@@ -114,7 +132,6 @@ export function ExportSheet({
     a.remove();
   }
 
-  const len = end - start;
   return (
     <Sheet label="Cut clip" onClose={onClose}>
       <h2>{phase.kind === "ready" ? "Clip ready" : "Cut clip"}</h2>
@@ -125,7 +142,11 @@ export function ExportSheet({
 
       {phase.kind === "ready" ? (
         <>
-          <video className="preview" src={clipFileUrl(phase.clipId)} autoPlay loop muted playsInline />
+          {ext === "gif" ? (
+            <img className="preview" src={clipFileUrl(phase.clipId)} alt="The GIF" />
+          ) : (
+            <video className="preview" src={clipFileUrl(phase.clipId)} autoPlay loop muted playsInline />
+          )}
           <div className="sheet-actions">
             <button className="btn btn-primary btn-block" data-autofocus onClick={save}>
               Save clip
@@ -147,11 +168,41 @@ export function ExportSheet({
         </>
       ) : (
         <>
-          <fieldset>
+          <fieldset disabled={phase.kind === "cutting"}>
             <legend>Format</legend>
             <label className="radio">
-              <input type="radio" name="format" checked readOnly />
+              <input type="radio" name="format" checked={format === "mp4"} onChange={() => setFormat("mp4")} />
               <span>Video (MP4)</span>
+            </label>
+            {movie.capabilities.dialogue && (
+              <label className="radio">
+                <input
+                  type="radio"
+                  name="format"
+                  checked={format === "subs"}
+                  onChange={() => setFormat("subs")}
+                />
+                <span>
+                  Video with subtitles <span className="hint">the dialogue, burned into the picture</span>
+                </span>
+              </label>
+            )}
+            <label className="radio">
+              <input
+                type="radio"
+                name="format"
+                checked={format === "gif"}
+                disabled={gifTooLong}
+                onChange={() => setFormat("gif")}
+              />
+              <span>
+                GIF{" "}
+                <span className="hint">
+                  {gifTooLong
+                    ? `GIF is limited to ${GIF_MAX_S} seconds. Shorten the clip to use it.`
+                    : `up to ${GIF_MAX_S} s, no sound`}
+                </span>
+              </span>
             </label>
           </fieldset>
           <fieldset disabled={phase.kind === "cutting"}>
@@ -172,14 +223,11 @@ export function ExportSheet({
                 type="radio"
                 name="mode"
                 checked={effectiveMode === "fast"}
-                disabled={crop}
+                disabled={!!quickReason}
                 onChange={() => setMode("fast")}
               />
               <span>
-                Quick{" "}
-                <span className="hint">
-                  {crop ? "not available when cropping to the face" : "instant, may start a moment early"}
-                </span>
+                Quick <span className="hint">{quickReason ?? "instant, may start a moment early"}</span>
               </span>
             </label>
           </fieldset>
