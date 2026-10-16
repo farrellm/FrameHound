@@ -209,7 +209,7 @@ Each stage writes its output and a `.done` marker under `/content/fh/{id}/work/`
 | 6 | sentences | **bge-small-en-v1.5** over transcript segments (plus 3-segment sliding windows) | `sentences.faiss` |
 | 8 | bundle | write `manifest.json`, `tar` + `zstd -19` | `index.tar.zst` |
 
-The visual stage decodes each sampled frame once for the embeddings and the thumbnails. The faces stage decodes the same 2 fps samples again at a higher resolution (720p rather than 384²), so its frame `k` is `frames.parquet` row `k`. The audio lane (audio, sentences) runs in a thread alongside the visual lane (shots, visual, faces), because Whisper and the vision models fit on the GPU together.
+The visual stage decodes each sampled frame once for the embeddings and the thumbnails. The faces stage decodes the same 2 fps samples again at a higher resolution (720p rather than 384²), so its frame `k` is `frames.parquet` row `k`. The audio lane (audio, sentences) runs in a thread alongside the visual lane (shots, visual, faces). On a GPU, the GPU-bound stages (audio, visual, faces) take turns: each one saturates an L4 by itself, so sharing only slowed both down and made their ETAs wrong. Shot detection runs on the CPU and NVDEC, so it still overlaps Whisper.
 
 **Visual model.** SigLIP v1 so400m has no ONNX export, so the lock pins `onnx-community/siglip2-so400m-patch14-384-ONNX` (SigLIP 2, same size, better retrieval): the VM runs `vision_model_fp16.onnx`, the host `text_model.onnx` (about 2.2 GB of RAM; a query takes about 0.6 s with the 3-prompt ensemble). Text is lowercased and padded to 64 tokens, as SigLIP was trained. `models.tiny.lock` uses SigLIP base (224 px) for development.
 

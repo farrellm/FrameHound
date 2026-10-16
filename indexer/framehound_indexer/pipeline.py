@@ -20,8 +20,10 @@ job.json::
     }
 
 The audio lane (audio, sentences) runs in a thread alongside the visual lane
-(shots, visual, faces): Whisper and the vision models fit on one GPU together,
-and on a CPU the two lanes still overlap ffmpeg decoding with inference.
+(shots, visual, faces). On a GPU the GPU-bound stages (audio, visual, faces) take
+turns, since sharing a saturated GPU only slows both and spoils their ETAs;
+shot detection (CPU and NVDEC) still overlaps Whisper. On a CPU the lanes
+overlap freely, so ffmpeg decoding overlaps inference.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ from .lock import ModelsLock, load_lock
 
 DEFAULT_STAGES = ["fetch", "shots", "visual", "faces", "audio", "sentences", "bundle"]
 AUDIO_LANE = {"audio", "sentences"}
+GPU_STAGES = {"audio", "visual", "faces"}  # each saturates the GPU on its own
 
 
 class Progress:
@@ -85,6 +88,7 @@ class Ctx:
     lock: ModelsLock
     progress: Progress
     durations: dict[str, float] = field(default_factory=dict)
+    gpu_turn: threading.Lock | None = None  # held by a GPU stage while it runs
 
     def media(self) -> Path:
         found = sorted(self.work.glob("media.*"))
@@ -546,10 +550,17 @@ def _run_stage(ctx: Ctx, stage: str) -> None:
     if marker.exists():
         ctx.progress.emit(stage, 1.0, state="done", force=True, resumed=True)
         return
-    ctx.progress.emit(stage, 0.0, force=True)
-    t0 = time.time()
-    STAGES[stage](ctx)
-    marker.write_text(f"{time.time() - t0:.3f}")
+    turn = ctx.gpu_turn if stage in GPU_STAGES else None
+    if turn is not None:
+        turn.acquire()  # before the first emit, so the wait stays "pending"
+    try:
+        ctx.progress.emit(stage, 0.0, force=True)
+        t0 = time.time()
+        STAGES[stage](ctx)
+        marker.write_text(f"{time.time() - t0:.3f}")
+    finally:
+        if turn is not None:
+            turn.release()
     ctx.progress.emit(stage, 1.0, state="done", force=True)
 
 
@@ -583,6 +594,8 @@ def run(job_path: str | os.PathLike[str]) -> None:
             except BaseException as e:  # noqa: BLE001 (re-raised on the main thread)
                 failure.append(e)
 
+        if ctx.device() == "cuda":
+            ctx.gpu_turn = threading.Lock()
         lane = None
         if audio and visual and job.get("parallel", True):
             lane = threading.Thread(target=audio_lane, name="audio-lane", daemon=True)
