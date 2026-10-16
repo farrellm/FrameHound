@@ -1,0 +1,36 @@
+{
+ "responseHeader": {
+  "status": 0,
+  "QTime": 28,
+  "params": {
+   "query": "collection:prelinger AND mediatype:movies",
+   "qin": "collection:prelinger AND mediatype:movies",
+   "fields": "identifier,title",
+   "wt": "json",
+   "rows": 4,
+   "start": 0
+  }
+ },
+ "response": {
+  "numFound": 10461,
+  "start": 0,
+  "docs": [
+   {
+    "identifier": "exercise_lesson_in_health_hygiene",
+    "title": "Exercise: A Film Lesson in Health and Hygiene"
+   },
+   {
+    "identifier": "educated_feet_for_correct_posture",
+    "title": "Educated Feet for Correct Posture"
+   },
+   {
+    "identifier": "invitation_to_a_nation",
+    "title": "Invitation to a Nation"
+   },
+   {
+    "identifier": "footage_panix_VMen",
+    "title": "V-Men"
+   }
+  ]
+ }
+}

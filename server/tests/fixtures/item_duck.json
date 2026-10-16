@@ -1,0 +1,333 @@
+{
+ "metadata": {
+  "identifier": "DuckandC1951",
+  "mediatype": "movies",
+  "title": "Duck and Cover"
+ },
+ "files": [
+  {
+   "name": "DuckandC1951.asr.js",
+   "source": "original",
+   "format": "Unknown",
+   "size": "87554",
+   "md5": "464a411a46265b8afe22a705c011d4a6"
+  },
+  {
+   "name": "DuckandC1951.asr.srt",
+   "source": "original",
+   "format": "SubRip",
+   "size": "10810",
+   "md5": "1a940f11b5128549cdc32cdbd4981fd6"
+  },
+  {
+   "name": "DuckandC1951.asr.vtt",
+   "source": "derivative",
+   "format": "Web Video Text Tracks",
+   "size": "12515",
+   "md5": "a4854ae327565b2315fd60091a1a1b4c"
+  },
+  {
+   "name": "DuckandC1951.avi",
+   "source": "derivative",
+   "format": "Cinepack",
+   "size": "31075542",
+   "md5": "f638c113c61304bd0db08dd9c3368fe0",
+   "length": "555.58"
+  },
+  {
+   "name": "DuckandC1951.gif",
+   "source": "derivative",
+   "format": "Animated GIF",
+   "size": "256817",
+   "md5": "abfd5fb25fb1c980bc070a7c301b0f70"
+  },
+  {
+   "name": "DuckandC1951.ia.mp4",
+   "source": "derivative",
+   "format": "h.264 IA",
+   "size": "53299301",
+   "md5": "6ce0cf8d4fd1a03c66395540bcfbba60",
+   "length": "554.99"
+  },
+  {
+   "name": "DuckandC1951.mp3",
+   "source": "derivative",
+   "format": "MP3",
+   "size": "4438016",
+   "md5": "bf6a378522d489b53bd51a2a7ceac3b3",
+   "length": "09:14"
+  },
+  {
+   "name": "DuckandC1951.mp4",
+   "source": "derivative",
+   "format": "MPEG4",
+   "size": "57591076",
+   "md5": "a5f2942d292783f366f23edd1e2a600d",
+   "length": "554.95"
+  },
+  {
+   "name": "DuckandC1951.mpeg",
+   "source": "original",
+   "format": "MPEG2",
+   "size": "256413203",
+   "md5": "751b15d49f3f6252ef3898821310ec6a",
+   "length": "555.28"
+  },
+  {
+   "name": "DuckandC1951.ogv",
+   "source": "derivative",
+   "format": "Ogg Video",
+   "size": "39412437",
+   "md5": "92725cda1c729837a88d66768e5a7835",
+   "length": "555.38"
+  },
+  {
+   "name": "DuckandC1951.png",
+   "source": "derivative",
+   "format": "PNG",
+   "size": "10303",
+   "md5": "108479093ca5059b78b03c90c36422c0"
+  },
+  {
+   "name": "DuckandC1951.storj-store.log",
+   "source": "derivative",
+   "format": "Storj Upload Log",
+   "size": "0",
+   "md5": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+   "name": "DuckandC1951.storj-store.trigger",
+   "source": "original",
+   "format": "Storj Upload Trigger",
+   "size": "0",
+   "md5": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000001.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "916",
+   "md5": "dcf45c6469e6d99542e33c21f2d91479"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000030.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "3480",
+   "md5": "0bde5077fe356466951e15a1cfd85616"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000060.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "4624",
+   "md5": "966fc7454913f89aea8ebd372ae22e59"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000090.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "5475",
+   "md5": "12a4fb58195853dc3a52558b000cea2b"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000120.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "6555",
+   "md5": "e51bad6aa5e7e9949d612e8c98ef8a21"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000150.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "5541",
+   "md5": "d5401e20aa94a4086a50bff652dd68cf"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000180.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "4706",
+   "md5": "e99ace46d2f075e86882d3498795c781"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000210.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "6828",
+   "md5": "830140a769cc996ac364ade4d2396784"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000240.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "6238",
+   "md5": "096fbe4eca15aeebf2d6a120301e7578"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000270.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "7452",
+   "md5": "49050604c167652cbcff8be2b2750c91"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000300.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "6353",
+   "md5": "e009133b3135abddb53bf9c2c4a06e2b"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000330.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "6991",
+   "md5": "d64a0053dcf8a9c359e825ecd51be5be"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000360.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "5910",
+   "md5": "8f4ddee73b378f881028a45252b936a9"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000390.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "6089",
+   "md5": "c06ce14d5da22e4a734c38b6b16ea519"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000420.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "6951",
+   "md5": "8bcaac4fce73fac827e7d875a7666d64"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000450.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "6932",
+   "md5": "e4686b6a630925f5ac19358eda8caffa"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000480.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "7810",
+   "md5": "9c14396b0303fd63d6fc49250f74a344"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000510.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "8026",
+   "md5": "3c48775c7dc2acec50c1302b8a11ad8f"
+  },
+  {
+   "name": "DuckandC1951.thumbs/DuckandC1951_000540.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "size": "4209",
+   "md5": "37037a9df3305cf8b3caeb05d60deb18"
+  },
+  {
+   "name": "DuckandC1951_256kb.rm",
+   "source": "derivative",
+   "format": "Real Media",
+   "size": "96825071",
+   "md5": "e4356f9aba8020abd6b7bffe8d359e88",
+   "length": "555.52"
+  },
+  {
+   "name": "DuckandC1951_512kb.mp4",
+   "source": "derivative",
+   "format": "512Kb MPEG4",
+   "size": "39240901",
+   "md5": "274c136b6c6c5121babd85b62f6d3436",
+   "length": "555.38"
+  },
+  {
+   "name": "DuckandC1951_64kb.rm",
+   "source": "derivative",
+   "format": "Real Media",
+   "size": "40709069",
+   "md5": "db0d88fb60e0d10a723eb38926935c53",
+   "length": "557.27"
+  },
+  {
+   "name": "DuckandC1951_archive.torrent",
+   "source": "metadata",
+   "format": "Archive BitTorrent",
+   "size": "35372",
+   "md5": "4eafae94cabb90d8d6266c8944d48be3"
+  },
+  {
+   "name": "DuckandC1951_edit.mp4",
+   "source": "derivative",
+   "format": "HiRes MPEG4",
+   "size": "172035430",
+   "md5": "8ad04b4745124b1bffaec3f6ce24b6cf",
+   "length": "555.18"
+  },
+  {
+   "name": "DuckandC1951_files.xml",
+   "source": "metadata",
+   "format": "Metadata",
+   "md5": "bd2d323831bb9ee92e194b5edf4c9637"
+  },
+  {
+   "name": "DuckandC1951_intermediate_asr.json",
+   "source": "derivative",
+   "format": "Intermediate ASR JSON",
+   "size": "16376",
+   "md5": "f1c21b212853ff6614cc72f9ed0bf3bb"
+  },
+  {
+   "name": "DuckandC1951_meta.sqlite",
+   "source": "original",
+   "format": "Metadata",
+   "size": "20480",
+   "md5": "22c003c1cb0142575da798441e26aed3"
+  },
+  {
+   "name": "DuckandC1951_meta.xml",
+   "source": "metadata",
+   "format": "Metadata",
+   "size": "1441",
+   "md5": "36441eba8916792ecfd518d84ae7ec49"
+  },
+  {
+   "name": "DuckandC1951_reviews",
+   "source": "original",
+   "format": "Unknown",
+   "size": "197031",
+   "md5": "17ee15a7e8c2847b41a271ce987de435"
+  },
+  {
+   "name": "DuckandC1951_reviews.xml",
+   "source": "metadata",
+   "format": "Metadata",
+   "size": "75541",
+   "md5": "4cb50307387841b6cd75cef4a37980ca"
+  },
+  {
+   "name": "DuckandC1951_whisper_asr.json",
+   "source": "derivative",
+   "format": "Whisper ASR JSON",
+   "size": "186188",
+   "md5": "aee2ceb525d2fc118621ef84af0bde5c"
+  },
+  {
+   "name": "__ia_thumb.jpg",
+   "source": "original",
+   "format": "Item Tile",
+   "size": "4514",
+   "md5": "14994ca537d352ef327242f5e5815629"
+  }
+ ]
+}

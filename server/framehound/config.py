@@ -1,0 +1,72 @@
+"""Every setting is an env var with a documented default (see .env.example)."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _env(name: str, default: str) -> str:
+    return os.environ.get(name, default)
+
+
+def _int(name: str, default: int) -> int:
+    return int(float(_env(name, str(default))))
+
+
+def _float(name: str, default: float) -> float:
+    return float(_env(name, str(default)))
+
+
+def _bool(name: str, default: bool) -> bool:
+    return _env(name, "1" if default else "0").lower() in ("1", "true", "yes", "on")
+
+
+@dataclass(frozen=True)
+class Settings:
+    data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", "/data")))
+    # Empty REDIS_URL runs jobs in background threads inside the api (dev mode).
+    redis_url: str = field(default_factory=lambda: _env("REDIS_URL", ""))
+    index_backend: str = field(default_factory=lambda: _env("INDEX_BACKEND", "local"))
+    max_duration_s: float = field(default_factory=lambda: _float("MAX_DURATION", 4 * 3600))
+    max_bytes: int = field(default_factory=lambda: _int("MAX_BYTES", 40 * 1024**3))
+    index_timeout_s: int = field(default_factory=lambda: _int("INDEX_TIMEOUT", 3600))
+    # The local backend runs on a CPU, where a feature takes 1-2 h.
+    local_index_timeout_s: int = field(default_factory=lambda: _int("LOCAL_INDEX_TIMEOUT", 4 * 3600))
+    stage_watchdog_s: int = field(default_factory=lambda: _int("STAGE_WATCHDOG", 600))
+    max_clip_s: float = field(default_factory=lambda: _float("MAX_CLIP_S", 120))
+    clip_ttl_s: int = field(default_factory=lambda: _int("CLIP_TTL", 24 * 3600))
+    heat_bins: int = field(default_factory=lambda: _int("HEAT_BINS", 512))
+    top_k: int = field(default_factory=lambda: _int("TOP_K", 10))
+    z_min: float = field(default_factory=lambda: _float("Z_MIN", 3.0))
+    # Dev/test only: lets downloads reach private addresses (e.g. a local http.server).
+    allow_private_urls: bool = field(default_factory=lambda: _bool("FH_ALLOW_PRIVATE_URLS", False))
+    ffmpeg_cpu_s: int = field(default_factory=lambda: _int("FFMPEG_CPU_S", 6 * 3600))
+    ffmpeg_mem_mb: int = field(default_factory=lambda: _int("FFMPEG_MEM_MB", 6144))
+    ffmpeg_threads: int = field(default_factory=lambda: _int("FFMPEG_THREADS", 0))
+    index_zstd_level: int = field(default_factory=lambda: _int("INDEX_ZSTD_LEVEL", 3))
+    stale_job_s: int = field(default_factory=lambda: _int("STALE_JOB_S", 300))
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "framehound.sqlite"
+
+    def movie_dir(self, movie_id: str) -> Path:
+        return self.data_dir / "movies" / movie_id
+
+
+_settings: Settings | None = None
+
+
+def settings() -> Settings:
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+
+def reset_settings() -> None:
+    """Re-read the environment (tests)."""
+    global _settings
+    _settings = None
