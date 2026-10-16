@@ -255,14 +255,15 @@ iPhone                                Desktop
 │ 1:32:04                        │    │ 1:32:04                                              │
 │                                │    │                                                      │
 │ 1 Downloading            done  │    │ 1 Downloading        done    ┃ You can close this    │
-│ 2 Getting a GPU     L4   done  │    │ 2 Getting a GPU  L4  done    ┃ page. Indexing keeps  │
-│ 3 Sending the movie      done  │    │ 3 Sending the movie  done    ┃ going, and the movie  │
-│ 4 Finding shots          done  │    │ 4 Finding shots      done    ┃ will be ready in      │
-│ 5 Looking at frames      done  │    │ 5 Looking at frames  done    ┃ about 6 minutes.      │
-│ 6 Finding faces           62%  │    │ 6 Finding faces       62%    ┃                       │
-│   ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░        │    │   ▓▓▓▓▓▓▓▓▓▓▓░░░░░░          ┃ GPU: Colab L4         │
-│ 7 Listening to dialogue   48%  │    │ 7 Listening to dialogue 48%  ┃ Used so far:          │
-│ 8 Packing the index            │    │ 8 Packing the index          ┃ 1.3 compute units     │
+│ 2 Making a playback copy done  │    │ 2 Making a playback copy done┃ page. Indexing keeps  │
+│ 3 Getting a GPU     L4   done  │    │ 3 Getting a GPU  L4  done    ┃ going, and the movie  │
+│ 4 Sending the movie      done  │    │ 4 Sending the movie  done    ┃ will be ready in      │
+│ 5 Finding shots          done  │    │ 5 Finding shots      done    ┃ about 6 minutes.      │
+│ 6 Looking at frames      done  │    │ 6 Looking at frames  done    ┃                       │
+│ 7 Finding faces           62%  │    │ 7 Finding faces       62%    ┃ GPU: Colab L4         │
+│   ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░        │    │   ▓▓▓▓▓▓▓▓▓▓▓░░░░░░          ┃ Used so far:          │
+│ 8 Listening to dialogue   48%  │    │ 8 Listening to dialogue 48%  ┃ 1.3 compute units     │
+│ 9 Packing the index            │    │ 9 Packing the index          ┃                       │
 │                                │    │                              ┃                       │
 │ About 6 minutes left.          │    │ [▣][▣][▣][▣][▣][▣][▣][▣] shots found so far           │
 │ You can close this page.       │    │                              ┃ Cancel indexing       │
@@ -279,7 +280,8 @@ iPhone                                Desktop
 
   | Shown | Pipeline stage ([design.md §5](design.md#5-stage-2--index-colab-gpu-worker-index)) |
   |---|---|
-  | Downloading | ingest: downloading, probing, transcoding_proxy |
+  | Downloading | ingest: downloading, probing |
+  | Making a playback copy | ingest: transcoding_proxy |
   | Getting a GPU | provisioning_gpu |
   | Sending the movie | staging_media, fetch |
   | Finding shots | shots |
@@ -288,10 +290,10 @@ iPhone                                Desktop
   | Listening to dialogue | audio, sentences |
   | Packing the index | thumbs, bundle, downloading_index, importing |
 
-- Stages that run at the same time (6 and 7) each show their own percentage.
+- Stages that run at the same time (7 and 8) each show their own percentage.
   - Only the active stage has a progress bar: a china-marker fill on an Emulsion track.
   - Completed stages say **done** in `--fog`.
-- **Shots found so far** (desktop, and on phone below the GPU line) shows a strip that fills with thumbnails as stage 4 produces them. It is the only decoration on the screen, and it is real data.
+- **Shots found so far** (desktop, and on phone below the GPU line) shows a strip that fills with thumbnails as stage 5 produces them. It is the only decoration on the screen, and it is real data.
 - **Cost** shows the GPU and the compute units used so far, so spending is never a surprise.
 - **Cancel indexing** is a `--danger` text button. Tapping it opens a confirmation sheet: "Stop indexing His Girl Friday? The GPU is released and the download is kept." The buttons are **Stop indexing** and **Keep going**.
 - **When indexing finishes**, the screen becomes Search in place. If the page was in the background, a toast reads **Ready to search** on return, and an optional push notification is sent (§5).

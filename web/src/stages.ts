@@ -7,7 +7,8 @@ interface GroupDef {
 }
 
 export const GROUPS: GroupDef[] = [
-  { label: "Downloading", stages: { downloading: 0.6, probing: 0.05, transcoding_proxy: 0.35 } },
+  { label: "Downloading", stages: { downloading: 0.95, probing: 0.05 } },
+  { label: "Making a playback copy", stages: { transcoding_proxy: 1 } },
   { label: "Getting a GPU", stages: { provisioning_gpu: 1 } },
   { label: "Sending the movie", stages: { staging_media: 0.2, fetch: 0.8 } },
   { label: "Finding shots", stages: { shots: 1 } },
