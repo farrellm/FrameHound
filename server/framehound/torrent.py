@@ -231,7 +231,7 @@ def _run(sess, h, movie_dir: Path, work: Path, on_file, on_progress, check_cance
             on_progress(0.0, 0, 0, st.num_peers)
         if st.num_peers > 0 and picked is None:
             last_progress = time.monotonic()  # fetching metadata from someone
-        if seed_until is None and time.monotonic() - last_progress > stall:
+        if stall > 0 and seed_until is None and time.monotonic() - last_progress > stall:
             mins = stall / 60
             raise FHError("torrent_stalled", f"The torrent has had no peers for "
                           f"{mins:g} minute{'s' if mins != 1 else ''}." if not st.num_peers

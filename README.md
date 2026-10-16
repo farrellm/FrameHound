@@ -12,8 +12,8 @@ picture, or a line of dialogue, and cuts a clip. See [docs/design.md](docs/desig
   with an SSRF guard, resumable downloads, and checksum checks.
 - Magnet links and `.torrent` files, downloaded with libtorrent on this host
   (never on Colab; the proxy is uploaded to the VM instead). Only the largest
-  video file is fetched, private-network peers are refused, a stalled torrent
-  fails after `TORRENT_STALL_S`, and seeding is off unless `SEED_RATIO` is set.
+  video file is fetched, private-network peers are refused, a torrent with no
+  peers waits for them (or fails after `TORRENT_STALL_S`, if set), and seeding is off unless `SEED_RATIO` is set.
   Up to `MAX_DOWNLOADS` (default 3) downloads run at once, each on its own
   BitTorrent port; compose publishes `TORRENT_PORT`–`TORRENT_PORT_LAST`
   (default 6881–6883, TCP and UDP) on worker-io so peers can connect in.

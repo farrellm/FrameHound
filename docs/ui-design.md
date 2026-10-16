@@ -305,9 +305,9 @@ iPhone                                Desktop
 | Colab auth broken | "Colab sign-in has expired. On the server, run `gcloud auth application-default login` with the Colab scopes, then retry." | **Retry** |
 | No GPU available | "Colab has no L4 or T4 available for this account right now. FrameHound will try again in 10 minutes." | **Index on this computer instead** (slow) |
 | Budget reached | "This would pass this month's GPU budget (40 compute units). Raise the budget in settings or index on this computer." | **Index on this computer instead** |
-| Download stalled | "The torrent has had no peers for 10 minutes." | **Retry**, **Remove movie** |
+| Download stalled (only when `TORRENT_STALL_S` is set) | "The torrent has had no peers for 10 minutes." | **Retry**, **Remove movie** |
 
-While a torrent downloads, the Downloading stage shows the peer count under its name ("4 peers", or "Finding peers" while a magnet's details arrive).
+While a torrent downloads, the Downloading stage shows the peer count under its name ("4 peers", "Waiting for peers" when none are connected, or "Finding peers" while a magnet's details arrive). With no stall timeout set, a torrent waits for peers until it is cancelled.
 
 ### 4.3 Search and timeline
 

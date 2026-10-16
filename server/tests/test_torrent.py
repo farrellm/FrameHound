@@ -99,6 +99,24 @@ def test_stall_without_peers(tmp_path, monkeypatch, seeder):
     assert e.value.code == "torrent_stalled" and "no peers" in e.value.message
 
 
+def test_no_stall_by_default(tmp_path, monkeypatch, seeder):
+    # With TORRENT_STALL_S unset, a peerless torrent waits until it is cancelled.
+    monkeypatch.setenv("FH_ALLOW_PRIVATE_URLS", "1")
+    monkeypatch.setenv("TORRENT_LISTEN", "127.0.0.1:0")
+    monkeypatch.delenv("TORRENT_STALL_S", raising=False)
+    config.reset_settings()
+    (tmp_path / "m").mkdir()
+    until = time.monotonic() + 3
+
+    def check_cancel():
+        if time.monotonic() > until:
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        download_torrent(tmp_path / "m", seeder["magnet"], lambda f: f"source{f.ext}",
+                         lambda *a: None, check_cancel)
+
+
 def test_private_peers_are_blocked(tmp_path, monkeypatch, seeder):
     # Without the dev override the IP filter refuses the seeder on 127.0.0.1.
     monkeypatch.setenv("TORRENT_LISTEN", "127.0.0.1:0")

@@ -73,7 +73,8 @@ class Settings:
     # io jobs (downloads, proxies, clips) at once: worker-io runs this many RQ
     # workers, and each torrent listens on its own port from TORRENT_LISTEN up.
     max_downloads: int = field(default_factory=lambda: max(1, _int("MAX_DOWNLOADS", 3)))
-    torrent_stall_s: float = field(default_factory=lambda: _float("TORRENT_STALL_S", 600))
+    # Fail a torrent after this long with no peers or no progress; 0 waits forever.
+    torrent_stall_s: float = field(default_factory=lambda: _float("TORRENT_STALL_S", 0))
     torrent_listen: str = field(default_factory=lambda: _env(
         "TORRENT_LISTEN", "0.0.0.0:6881,[::]:6881"))
     max_torrent_kb: int = field(default_factory=lambda: _int("MAX_TORRENT_KB", 2048))

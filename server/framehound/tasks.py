@@ -88,8 +88,8 @@ def run_ingest(job_id: str) -> None:
                     return name
 
                 def on_tor(frac: float, done: int, total: int, peers: int) -> None:
-                    note = f"{peers} peer{'' if peers == 1 else 's'}" if total \
-                        else "Finding peers"
+                    note = "Finding peers" if not total else "Waiting for peers" \
+                        if not peers else f"{peers} peer{'' if peers == 1 else 's'}"
                     job.stage("downloading", frac, eta(frac), message=note)
 
                 src = download_torrent(mdir, m["source_url"], on_file, on_tor,
