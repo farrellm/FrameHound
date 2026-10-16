@@ -197,7 +197,8 @@ function AddMovie({ onAdded, canFind }: { onAdded: () => void; canFind: boolean 
             ref={input}
             className="field"
             type="text"
-            inputMode="url"
+            // The URL keyboard has no space bar, and a name needs one.
+            inputMode={canFind ? "text" : "url"}
             autoComplete="off"
             autoCapitalize="off"
             autoCorrect="off"

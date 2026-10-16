@@ -172,7 +172,7 @@ iPhone                                Desktop
 ```
 
 - **The field** is a single input that accepts an `https://` URL, an archive.org link, or a `magnet:` link. Its placeholder says exactly that.
-  - On iPhone the keyboard is `inputmode="url"`, and on focus a **Paste** chip appears above the keyboard. Most links arrive by copying from Safari.
+  - On iPhone the keyboard is `inputmode="url"` (plain text when Bitmagnet is configured, because the URL keyboard has no space bar for a movie's name), and on focus a **Paste** chip appears above the keyboard. Most links arrive by copying from Safari.
   - "Choose a .torrent file" opens the Files picker.
   - The button is disabled until the field parses as one of the three source types.
   - **With Bitmagnet configured**, the field also takes a movie's name. Its placeholder becomes "Paste a link, or type a movie's name". Text that isn't a link (two letters or more) makes **Add movie** open the release picker below instead of starting a job. It is the same verb and the same pattern as a collection.
