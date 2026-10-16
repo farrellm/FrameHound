@@ -164,6 +164,21 @@ TORCH_TWINS = {
 }
 
 
+def prefetch_torch_twin(lock: ModelsLock) -> None:
+    """Download the vision tower's PyTorch twin (4.3 GB, about 30 s on Colab) ahead
+    of the visual stage, which would otherwise wait for it."""
+    twin = TORCH_TWINS.get((lock.visual["repo"], lock.visual["revision"]))
+    if twin is None:
+        return
+    try:
+        snapshot(twin[0], twin[1], ["config.json", "model.safetensors"])
+    except Exception as e:  # noqa: BLE001 (the visual stage retries, or uses ONNX)
+        import sys
+
+        print(f"visual: prefetching the PyTorch twin failed ({type(e).__name__}: {e})",
+              file=sys.stderr, flush=True)
+
+
 class VisualEncoder:
     """SigLIP (2): text and vision towers, each loaded on first use.
 

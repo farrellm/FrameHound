@@ -595,6 +595,10 @@ def run(job_path: str | os.PathLike[str]) -> None:
 
         if ctx.device() == "cuda":
             ctx.gpu_turn = threading.Lock()
+            if "visual" in visual and not (work / "visual.done").exists():
+                from .encoders import prefetch_torch_twin
+
+                threading.Thread(target=prefetch_torch_twin, args=(lock,), daemon=True).start()
         lane = None
         if audio and visual and job.get("parallel", True):
             lane = threading.Thread(target=audio_lane, name="audio-lane", daemon=True)

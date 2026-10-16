@@ -220,12 +220,12 @@ The visual stage decodes each sampled frame once for the embeddings and the thum
 - **Embeddings:**
   - SigLIP: about 14.4k × 1152 × 4 B ≈ 66 MB. Stored as fp16 that is about 33 MB.
   - Faces: typically 10–40k × 512 × 2 B ≈ 10–40 MB.
-- **Compute on an L4:**
-  - Decode plus SigLIP: about 4 min.
-  - Faces: about 4 min.
-  - Whisper large-v3 (fp16, batched): about 5–6 min, running in parallel.
+- **Compute on an L4** (measured on a 10-min clip and a 2h11m film, Oct 2026):
+  - Whisper large-v3 (fp16, batched): about 10–12 min (49–60 s per 10 min of audio). Only shot detection (3–5 min) overlaps it.
+  - Decode plus SigLIP: about 6 min at 40 frames/s, with the vision tower in PyTorch with SDPA attention. The ONNX export manages 22–25 frames/s. The 4.3 GB PyTorch checkpoint downloads in the background while Whisper runs.
+  - Faces: about 4 min (estimate).
 - **Overhead:** provisioning plus installation adds about 2–3 min.
-- **Total:** about **12–15 min** of wall time and a bundle of **about 60–120 MB**.
+- **Total:** about **22–25 min** of wall time and a bundle of **about 60–120 MB**.
 
 ### `LocalIndexBackend`
 

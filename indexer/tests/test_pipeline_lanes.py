@@ -3,14 +3,16 @@ import threading
 import time
 
 import pytest
-from framehound_indexer import pipeline
+from framehound_indexer import encoders, pipeline
 
 STAGES = ["shots", "visual", "faces", "audio", "sentences"]
 
 
-def run_fake(tmp_path, monkeypatch, device: str) -> list[tuple[str, float, float]]:
-    """Run the lanes with stages that just sleep; return (stage, start, end)."""
+def run_fake(tmp_path, monkeypatch, device: str, prefetched: list | None = None):
+    """Run the lanes with stages that just sleep; return (stage, start, end) spans."""
     spans: list[tuple[str, float, float]] = []
+    monkeypatch.setattr(encoders, "prefetch_torch_twin",
+                        lambda lock: (prefetched if prefetched is not None else []).append(lock))
     lock = threading.Lock()
 
     def fake(name):
@@ -37,7 +39,9 @@ def overlaps(spans, a: str, b: str) -> bool:
 
 @pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_gpu_stages_take_turns_only_on_a_gpu(tmp_path, monkeypatch, device):
-    spans = run_fake(tmp_path, monkeypatch, device)
+    prefetched: list = []
+    spans = run_fake(tmp_path, monkeypatch, device, prefetched)
+    assert len(prefetched) == (device == "cuda")
     assert sorted(s[0] for s in spans) == sorted(STAGES)
     assert overlaps(spans, "shots", "audio")  # shot detection still overlaps Whisper
     gpu_overlap = any(overlaps(spans, a, b) for a in ("visual", "faces") for b in ("audio",))
