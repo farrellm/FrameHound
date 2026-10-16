@@ -45,6 +45,10 @@ class ModelsLock:
         return self.data["visual"]
 
     @property
+    def faces(self) -> dict[str, Any]:
+        return self.data["faces"]
+
+    @property
     def shots(self) -> dict[str, Any]:
         return self.data["shots"]
 

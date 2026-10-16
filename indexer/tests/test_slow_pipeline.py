@@ -38,7 +38,9 @@ def test_tiny_pipeline_end_to_end(tmp_path, monkeypatch):
     assert lines[-1]["stage"] == "done"
     work = tmp_path / "w/work"
     manifest = json.loads((work / bundle.MANIFEST).read_text())
-    assert manifest["contents"] == ["dialogue", "visual"]
+    assert manifest["contents"] == ["dialogue", "visual", "faces"]
+    # Test patterns have no faces: the stage still writes an (empty) index.
+    assert manifest["counts"]["faces"] == manifest["counts"]["faces_index"] == 0
     assert manifest["counts"]["shots"] == 3 and manifest["counts"]["frames"] == 24
 
     from framehound_indexer.encoders import encode_text

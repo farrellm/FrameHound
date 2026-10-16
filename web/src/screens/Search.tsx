@@ -31,9 +31,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
   const fps = movie.fps || 24;
   const frame = 1 / fps;
   const initial = useMemo(() => new URLSearchParams(location.search), []);
-  // Show a picture needs image search, which arrives with faces (M3).
-  const available = (m: Mode) =>
-    m === "quote" ? movie.capabilities.dialogue : m === "describe" ? movie.capabilities.visual : false;
+  const available = (m: Mode) => (m === "quote" ? movie.capabilities.dialogue : movie.capabilities.visual);
 
   const video = useRef<HTMLVideoElement>(null);
   const [t, setT] = useState(0);
@@ -48,6 +46,15 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
     api.shots(movie.id).then(setShots, () => {});
   }, [movie.id, movie.capabilities.visual]);
   const [q, setQ] = useState(initial.get("q") ?? "");
+  // Show a picture: the chosen image stays in memory (it isn't put in the URL).
+  const [image, setImage] = useState<File | null>(null);
+  const imageUrl = useMemo(() => (image ? URL.createObjectURL(image) : null), [image]);
+  useEffect(
+    () => () => {
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+    },
+    [imageUrl],
+  );
   const [result, setResult] = useState<SearchResult | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -134,19 +141,22 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
   const zoomed = view.from > 0.01 || view.to < duration - 0.01;
 
   const runSearch = useCallback(
-    async (text: string, m: Mode) => {
+    async (text: string, m: Mode, img: File | null = null) => {
       const query = text.trim();
-      if (!query) return;
+      if (m === "picture" ? !img : !query) return;
       setSearching(true);
       setError(null);
-      setQuery({ q: query, mode: m });
+      setQuery(m === "picture" ? { q: null, mode: m } : { q: query, mode: m });
       try {
         const bins = Math.min(4096, Math.max(256, Math.round(window.innerWidth * 1.5)));
-        const r = await api.search(movie.id, {
-          type: MODES.find((x) => x.id === m)!.type,
-          q: query,
-          heat_bins: bins,
-        });
+        const r =
+          m === "picture"
+            ? await api.searchImage(movie.id, img!, { heat_bins: bins })
+            : await api.search(movie.id, {
+                type: MODES.find((x) => x.id === m)!.type,
+                q: query,
+                heat_bins: bins,
+              });
         setResult(r);
         setSelected(null);
         setSweepKey((k) => k + 1);
@@ -165,11 +175,24 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
     [movie.id, announce],
   );
 
-  // A query restored from the URL runs on arrival.
+  // A query restored from the URL runs on arrival (a picture isn't in the URL).
   useEffect(() => {
-    if (initial.get("q")) runSearch(initial.get("q")!, mode);
+    if (initial.get("q") && mode !== "picture") runSearch(initial.get("q")!, mode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Show a picture also takes a pasted image (desktop).
+  useEffect(() => {
+    if (mode !== "picture") return;
+    const onPaste = (e: ClipboardEvent) => {
+      const f = imageFile(e.clipboardData);
+      if (!f) return;
+      e.preventDefault();
+      setImage(f);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [mode]);
 
   const select = useCallback(
     (i: number) => {
@@ -291,8 +314,19 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
       role="search"
       onSubmit={(e) => {
         e.preventDefault();
-        runSearch(q, mode);
+        runSearch(q, mode, image);
         (document.activeElement as HTMLElement | null)?.blur?.();
+      }}
+      onDragOver={(e) => {
+        if (available("picture") && e.dataTransfer.types.includes("Files")) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        const f = imageFile(e.dataTransfer);
+        if (!f || !available("picture")) return;
+        e.preventDefault();
+        setModeNote(null);
+        setMode("picture");
+        setImage(f);
       }}
     >
       <div className="segmented" role="radiogroup" aria-label="How to search">
@@ -307,9 +341,9 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             onClick={() => {
               if (!available(m.id))
                 return setModeNote(
-                  m.id === "picture"
-                    ? "Searching by picture isn't available yet. Describe it in words instead."
-                    : "This movie was indexed for dialogue only. Re-index it to describe what's on screen.",
+                  m.id === "quote"
+                    ? "This movie has no dialogue index. Re-index it to search what's said."
+                    : "This movie was indexed for dialogue only. Re-index it to search what's on screen.",
                 );
               setModeNote(null);
               setMode(m.id);
@@ -324,7 +358,40 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
         <label htmlFor="q" className="visually-hidden">
           {MODES.find((m) => m.id === mode)!.label}
         </label>
-        {mode === "describe" ? (
+        {mode === "picture" ? (
+          image ? (
+            <span className="picture-chosen">
+              <img src={imageUrl!} alt="" />
+              <span className="picture-name">{image.name || "Pasted picture"}</span>
+              <button
+                type="button"
+                className="btn btn-text"
+                aria-label="Clear the picture"
+                onClick={() => setImage(null)}
+              >
+                ✕
+              </button>
+            </span>
+          ) : (
+            <span className="picture-pick">
+              <label className="btn picture-choose">
+                Choose a picture
+                <input
+                  id="q"
+                  type="file"
+                  accept="image/*"
+                  className="visually-hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) setImage(f);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <span className="note desktop-only">or paste or drop one here</span>
+            </span>
+          )
+        ) : mode === "describe" ? (
           <textarea
             id="q"
             className="field"
@@ -356,7 +423,11 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             autoComplete="off"
           />
         )}
-        <button className="btn btn-primary" type="submit" disabled={searching || !q.trim()}>
+        <button
+          className="btn btn-primary"
+          type="submit"
+          disabled={searching || (mode === "picture" ? !image : !q.trim())}
+        >
           {searching ? "Finding…" : "Find"}
         </button>
       </div>
@@ -494,6 +565,11 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
               </ul>
             </>
           )}
+          {!error && !modelsMismatch && result?.face_found === false && (
+            <p className="note" style={{ marginTop: 8 }}>
+              No face found in this picture, so FrameHound matched how it looks overall.
+            </p>
+          )}
         </section>
         <p className="note desktop-only">
           Press <kbd>?</kbd> for keyboard shortcuts.
@@ -513,13 +589,18 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
           movie={movie}
           start={inPt!}
           end={outPt!}
-          hasFace={!!current?.has_face}
+          faceBox={current?.reason === "face" && current.has_face ? (current.face_bbox ?? null) : null}
           onClose={() => setExporting(false)}
         />
       )}
       {showKeys && <KeysSheet onClose={() => setShowKeys(false)} />}
     </main>
   );
+}
+
+/** The first image file in a paste or a drop. */
+function imageFile(data: DataTransfer | null): File | null {
+  return [...(data?.files ?? [])].find((f) => f.type.startsWith("image/")) ?? null;
 }
 
 function words(c: Candidate): string {

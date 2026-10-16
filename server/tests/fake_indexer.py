@@ -3,7 +3,9 @@ with a fixed transcript and a tiny visual index (8 frames at 2 Hz, two shots),
 without loading any models.
 
 Frame embeddings are one-hot over the first ``VISUAL_DIM`` dims, so a query
-vector ``e_k`` matches frame k; ``FH_FAKE_STALL`` makes it hang after starting.
+vector ``e_k`` matches frame k. Faces (``FACES``: frame row, box) are one-hot
+over 512 dims, so ``e_j`` matches face j. ``FH_FAKE_STALL`` makes it hang after
+starting.
 """
 
 import json
@@ -24,6 +26,7 @@ LINES = [(0.2, 1.0, "hello there"), (1.2, 2.6, "never come back here")]
 SHOTS = [(0.0, 2.0), (2.0, 4.0)]
 FRAMES = 8
 VISUAL_DIM = 16
+FACES = [(1, (0.1, 0.2, 0.1, 0.15)), (6, (0.4, 0.3, 0.1, 0.15)), (6, (0.7, 0.1, 0.05, 0.08))]
 
 
 def main(job_path: str) -> None:
@@ -73,16 +76,26 @@ def main(job_path: str) -> None:
     (work / bundle.THUMBS).mkdir(exist_ok=True)
     for i in range(len(SHOTS)):
         (work / bundle.THUMBS / f"{i}.jpg").write_bytes(b"\xff\xd8fake\xff\xd9")
+    pq.write_table(pa.table({
+        "row": pa.array(range(len(FACES)), pa.int32()),
+        "frame_row": pa.array([f for f, _ in FACES], pa.int32()),
+        **{c: pa.array([b[i] for _, b in FACES], pa.float32())
+           for i, c in enumerate(("x", "y", "w", "h"))},
+        "det_score": pa.array([0.9] * len(FACES), pa.float32())}), work / bundle.FACES_TABLE)
+    faces = faiss.IndexFlatIP(512)
+    faces.add(np.eye(len(FACES), 512, dtype=np.float32))
+    faiss.write_index(faces, str(work / bundle.FACES_INDEX))
     lock = ModelsLock(job["models_lock"])
     (work / bundle.MANIFEST).write_text(json.dumps({
         "format": bundle.FORMAT, "models_lock_hash": lock.hash,
-        "contents": ["dialogue", "visual"],
+        "contents": ["dialogue", "visual", "faces"],
         "counts": {"transcript_segments": len(LINES), "sentences": len(units),
                    "sentences_index": len(units), "shots": len(SHOTS), "frames": FRAMES,
-                   "clip_index": FRAMES}}))
+                   "clip_index": FRAMES, "faces": len(FACES), "faces_index": len(FACES)}}))
     bundle.pack(work, [bundle.MANIFEST, bundle.TRANSCRIPT, bundle.SENTENCES_TABLE,
                        bundle.SENTENCES_INDEX, bundle.SHOTS, bundle.FRAMES, bundle.CLIP_INDEX,
-                       bundle.THUMBS], out / bundle.BUNDLE_NAME, level=1)
+                       bundle.THUMBS, bundle.FACES_TABLE, bundle.FACES_INDEX],
+                out / bundle.BUNDLE_NAME, level=1)
     emit(stage="done", state="done", pct=1.0)
 
 

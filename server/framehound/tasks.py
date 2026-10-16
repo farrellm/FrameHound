@@ -16,7 +16,7 @@ from .download import download, sha256_file
 from .errors import Cancelled, FHError
 from .importer import import_bundle
 from .index_backend import SessionLost, get_backend
-from .media import cut_clip, ffprobe, transcode_proxy, validate
+from .media import cut_clip, face_crop, ffprobe, transcode_proxy, validate
 from .safe_http import SafeClient
 
 log = logging.getLogger("framehound.tasks")
@@ -358,8 +358,14 @@ def run_clip(job_id: str) -> None:
         out = mdir / "clips" / f"{clip['id']}.{clip['format']}"
         out.parent.mkdir(parents=True, exist_ok=True)
         job.stage("cutting", 0.0, force=True)
+        crop = None
+        if clip["crop_box"]:
+            if not (m["width"] and m["height"]):
+                raise FHError("bad_crop", "FrameHound doesn't know this movie's frame size, "
+                              "so it can't crop. Cut without cropping.")
+            crop = face_crop(json.loads(clip["crop_box"]), int(m["width"]), int(m["height"]))
         cut_clip(src, out, clip["start"], clip["end"], clip["mode"],
-                 lambda f: job.stage("cutting", f), job.check_cancel)
+                 lambda f: job.stage("cutting", f), job.check_cancel, crop=crop)
         conn.execute("UPDATE clips SET path=? WHERE id=?", (str(out), clip["id"]))
         job.stage_done("cutting")
         job.finish()

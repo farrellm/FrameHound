@@ -1,9 +1,9 @@
 """Query encoders shared by the indexing pipeline and the api.
 
 Everything runs on ONNX Runtime, so the api needs no torch: ``encode_sentence``
-(bge-small) and ``encode_text`` / ``encode_image`` (SigLIP 2). The indexing
-pipeline uses the same classes, on CUDA when the VM has it. ``encode_face``
-arrives with the face stage (M3).
+(bge-small), ``encode_text`` / ``encode_image`` (SigLIP 2) and ``encode_face``
+(InsightFace, in ``faces.py``). The indexing pipeline uses the same classes, on
+CUDA when the VM has it.
 """
 
 from __future__ import annotations
@@ -286,3 +286,35 @@ def encode_text(q: str) -> np.ndarray:
 
 def encode_image(image) -> np.ndarray:
     return visual_encoder().encode_images([image])[0]
+
+
+_face = None
+_face_lock = threading.Lock()
+
+
+def face_encoder():
+    from .faces import FaceEncoder
+
+    global _face
+    with _face_lock:
+        if _face is None:
+            _face = FaceEncoder()
+        return _face
+
+
+def encode_face(image) -> tuple[np.ndarray, tuple[float, float, float, float]] | None:
+    """The largest face in a picture: its ArcFace identity and its box as fractions of
+    the picture (x, y, w, h), or None when no face is found."""
+    from PIL import Image
+
+    from .faces import align, largest, normalized_box
+
+    if not isinstance(image, np.ndarray):
+        image = np.asarray(image.convert("RGB") if isinstance(image, Image.Image) else image)
+    enc = face_encoder()
+    face = largest(enc.detect_query(image))
+    if face is None:
+        return None
+    vec = enc.embed([align(image, face)])[0]
+    h, w = image.shape[:2]
+    return vec, normalized_box(face, w, h)

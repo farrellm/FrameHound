@@ -408,7 +408,7 @@ iPhone sheet                          Desktop (sheet anchored right, 400 px)
 - Choices are radio groups with plain names. The *system's* terms (accurate/fast, `-c copy`) never appear.
   - **Exact**: "cuts on the frame".
   - **Quick**: "instant, may start a moment early".
-- **Crop to the face** appears only for **Same face** candidates.
+- **Crop to the face** appears only for **Same face** candidates. Cropping re-encodes, so while it is checked **Quick** is disabled with the reason inline: "not available when cropping to the face".
 - **GIF up to 15 s.** If the span is longer, the GIF option is disabled with the reason inline: "GIF is limited to 15 seconds. Shorten the clip to use it."
 - **The action keeps one name through the flow:**
   - The button is **Cut clip**.

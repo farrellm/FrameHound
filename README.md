@@ -4,7 +4,7 @@ A self-hosted webapp that downloads a movie, finds a moment in it by description
 picture, or a line of dialogue, and cuts a clip. See [docs/design.md](docs/design.md)
 (system) and [docs/ui-design.md](docs/ui-design.md) (UI).
 
-**Status: milestone M2 (Colab + visual).** Implemented:
+**Status: milestone M3 (faces & images).** Implemented:
 
 - Docker Compose stack: `web` (nginx + React SPA), `api` (FastAPI), `redis`,
   `worker-io` and `worker-index` (RQ).
@@ -17,19 +17,24 @@ picture, or a line of dialogue, and cuts a clip. See [docs/design.md](docs/desig
   that stops orphaned `fh-*` sessions. `LocalIndexBackend` runs the same
   pipeline on this host.
 - The pipeline: shot detection, SigLIP 2 frame embeddings at 2 fps with a
-  thumbnail per shot, and (in parallel) faster-whisper with word timestamps plus
+  thumbnail per shot, InsightFace (SCRFD + ArcFace on ONNX Runtime) faces in the
+  same frames, and (in parallel) faster-whisper with word timestamps plus
   bge-small sentence embeddings.
 - Describe it (text) search: prompt-ensembled SigLIP 2 scores turned into
   shot-snapped candidate segments and a heat-map.
+- Show a picture (image) search: SigLIP looks fused with ArcFace identity, so
+  the same face outranks a similar-looking frame.
 - Dialogue search: fuzzy lexical and semantic matching, word-accurate bounds,
   and the heat-map series.
-- Accurate (re-encoded) and quick (stream copy) MP4 clips.
+- Accurate (re-encoded) and quick (stream copy) MP4 clips, optionally cropped
+  to the face of a Same face match.
 - The UI: library, indexing progress over SSE, search and a timeline strip with
   real shot thumbnails, and the export sheet, at iPhone and desktop sizes.
 
-Not yet: faces and Show a picture search (M3); torrents, GIF and subtitle
-export, the reranker, eviction, and token auth (M4). Movies indexed by M1 need a
-re-index (the models lock changed) before Describe it works.
+Not yet: torrents, GIF and subtitle export, the reranker, eviction, and token
+auth (M4). Movies indexed before M3 need a re-index (the models lock changed)
+before they can be searched. InsightFace's pretrained face models are licensed
+for non-commercial research use.
 
 ## Run it
 

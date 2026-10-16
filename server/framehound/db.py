@@ -46,7 +46,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(
 CREATE TABLE IF NOT EXISTS queries(id TEXT PRIMARY KEY, movie_id TEXT, type TEXT, q TEXT,
   image_sha TEXT, created_at REAL, latency_ms REAL);
 CREATE TABLE IF NOT EXISTS clips(id TEXT PRIMARY KEY, movie_id TEXT, start REAL, "end" REAL,
-  mode TEXT, format TEXT, path TEXT, job_id TEXT, created_at REAL);
+  mode TEXT, format TEXT, path TEXT, job_id TEXT, created_at REAL,
+  crop_box TEXT /* JSON [x, y, w, h], fractions of the frame */);
 """
 
 _ALPHABET = string.ascii_lowercase + string.digits
@@ -95,6 +96,10 @@ def tx(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 def init() -> None:
     with db() as conn:
         conn.executescript(SCHEMA)
+        # Columns added after a release: CREATE TABLE IF NOT EXISTS leaves old tables be.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(clips)")}
+        if "crop_box" not in cols:
+            conn.execute("ALTER TABLE clips ADD COLUMN crop_box TEXT")
 
 
 def row(conn: sqlite3.Connection, sql: str, *args) -> dict | None:

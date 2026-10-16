@@ -134,16 +134,41 @@ def transcode_proxy(src: Path, dst: Path, duration_s: float, on_progress, check_
     tmp.replace(dst)
 
 
+CROP_EXPAND = 2.5
+
+
+def face_crop(box: list[float], width: int, height: int) -> tuple[int, int, int, int]:
+    """The crop (w, h, x, y in pixels) for a face at ``box`` (x, y, w, h as fractions
+    of a ``width``×``height`` frame): the face expanded 2.5× around its centre, grown
+    to portrait 9:16, or to 1:1 when 9:16 won't fit the frame, then kept inside it.
+    A fixed box at the peak; following a moving face is out of scope (design.md §7)."""
+    fx, fy, fw, fh = box[0] * width, box[1] * height, box[2] * width, box[3] * height
+    cx, cy = fx + fw / 2, fy + fh / 2
+    side = max(fw, fh) * CROP_EXPAND
+    for aspect in (9 / 16, 1.0):  # width / height: the narrowest box holding the square
+        w, h = side, side / aspect
+        if h <= height and w <= width:
+            break
+    # Too big for the frame either way: the largest box of that aspect that fits.
+    scale = min(1.0, width / w, height / h)
+    w, h = w * scale, h * scale
+    w, h = max(2, int(w) // 2 * 2), max(2, int(h) // 2 * 2)
+    x = round(min(max(cx - w / 2, 0), width - w))
+    y = round(min(max(cy - h / 2, 0), height - h))
+    return w, h, x, y
+
+
 def cut_clip(src: Path, dst: Path, start: float, end: float, mode: str,
-             on_progress, check_cancel) -> None:
+             on_progress, check_cancel, crop: tuple[int, int, int, int] | None = None) -> None:
     dur = end - start
     tmp = dst.with_name(dst.stem + ".part" + dst.suffix)
     head = ["-ss", f"{start:.3f}", "-protocol_whitelist", "file", "-i", str(src),
             "-t", f"{dur:.3f}", "-map", "0:v:0", "-map", "0:a:0?"]
-    if mode == "fast":
+    if mode == "fast" and crop is None:
         body = ["-c", "copy", "-avoid_negative_ts", "make_zero"]
     else:
-        body = ["-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
+        vf = ["-vf", "crop={}:{}:{}:{}".format(*crop)] if crop else []
+        body = [*vf, "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "160k"]
     run_ffmpeg([*head, *body, "-movflags", "+faststart", str(tmp)], dur, on_progress,
                check_cancel)

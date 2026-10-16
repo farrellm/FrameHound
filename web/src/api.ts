@@ -72,6 +72,8 @@ export interface Candidate {
   reason: "visual" | "face" | "dialogue";
   thumbs: string[];
   has_face: boolean;
+  /** Same face hits: the face at peak_t, as fractions of the frame [x, y, w, h]. */
+  face_bbox?: number[] | null;
   matched_words?: Word[];
   text?: string;
 }
@@ -93,6 +95,8 @@ export interface SearchResult {
   heat: number[];
   heat_threshold: number;
   latency_ms: number;
+  /** Show a picture: whether a face was found in it (null when the movie has no faces). */
+  face_found?: boolean | null;
 }
 
 export interface Choice {
@@ -112,6 +116,7 @@ export interface Clip {
   start: number;
   end: number;
   ready: boolean;
+  crop: boolean;
   file_url: string;
   job: Job | null;
 }
@@ -136,13 +141,20 @@ const BASE = "/api";
 const media = (u: string) => (u.startsWith("/") ? BASE + u : u);
 const withThumbs = <T extends { thumbs: string[] }>(x: T): T => ({ ...x, thumbs: x.thumbs.map(media) });
 
+const withCandidateThumbs = (r: SearchResult): SearchResult => ({
+  ...r,
+  candidates: r.candidates.map(withThumbs),
+});
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
+  const form = body instanceof FormData;
   try {
     res = await fetch(BASE + path, {
       method,
-      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // FormData sets its own multipart content type.
+      headers: body === undefined || form ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : form ? body : JSON.stringify(body),
     });
   } catch {
     throw new ApiError(0, {
@@ -171,11 +183,19 @@ export const api = {
   remove: (id: string) => req<void>("DELETE", `/movies/${id}`),
   progress: (id: string) => req<IndexProgress>("GET", `/movies/${id}/index-progress`),
   search: (id: string, body: { type: string; q: string; heat_bins?: number; top_k?: number }) =>
-    req<SearchResult>("POST", `/movies/${id}/search`, body).then((r) => ({
-      ...r,
-      candidates: r.candidates.map(withThumbs),
-    })),
-  cutClip: (id: string, body: { start: number; end: number; mode: "accurate" | "fast" }) =>
+    req<SearchResult>("POST", `/movies/${id}/search`, body).then(withCandidateThumbs),
+  searchImage: (id: string, image: Blob, opts: { heat_bins?: number; top_k?: number } = {}) => {
+    const form = new FormData();
+    form.set("type", "image");
+    if (opts.heat_bins) form.set("heat_bins", String(opts.heat_bins));
+    if (opts.top_k) form.set("top_k", String(opts.top_k));
+    form.set("image", image, image instanceof File ? image.name : "picture");
+    return req<SearchResult>("POST", `/movies/${id}/search`, form).then(withCandidateThumbs);
+  },
+  cutClip: (
+    id: string,
+    body: { start: number; end: number; mode: "accurate" | "fast"; crop?: boolean; face_bbox?: number[] },
+  ) =>
     req<{ clip_id: string; job_id: string }>("POST", `/movies/${id}/clips`, { ...body, format: "mp4" }),
   clip: (id: string) => req<Clip>("GET", `/clips/${id}`),
   cancel: (jobId: string) => req<void>("POST", `/jobs/${jobId}/cancel`),

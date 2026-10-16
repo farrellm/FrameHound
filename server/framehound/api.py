@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -23,12 +24,13 @@ from . import db, jobs, queue, tasks
 from .config import settings
 from .errors import FHError
 from .resolver import Collection, SourceResolver
-from .search import dialogue, visual
+from .search import dialogue, faces, visual
 
 log = logging.getLogger("framehound.api")
 
 _encoder_state = {"state": "loading", "error": None}
 _visual_state = {"state": "loading", "error": None}
+_face_state = {"state": "loading", "error": None}
 
 
 def _warm_encoders() -> None:
@@ -44,10 +46,19 @@ def _warm_encoders() -> None:
         from framehound_indexer.encoders import visual_encoder
 
         visual_encoder().text_session()
+        visual_encoder().vision_session()
         _visual_state["state"] = "ready"
-    except Exception as e:  # Describe it is unavailable until it loads
+    except Exception as e:  # Describe it and Show a picture are unavailable until it loads
         log.exception("visual encoder failed to load")
         _visual_state.update(state="error", error=f"{type(e).__name__}: {e}")
+    try:
+        from framehound_indexer.encoders import face_encoder
+
+        face_encoder().sessions()
+        _face_state["state"] = "ready"
+    except Exception as e:  # Show a picture degrades to looks only
+        log.exception("face encoder failed to load")
+        _face_state.update(state="error", error=f"{type(e).__name__}: {e}")
 
 
 def _colab_forever() -> None:
@@ -185,6 +196,7 @@ def health():
         "colab": _colab_health(),
         "encoders": _encoder_state,
         "visual_encoder": _visual_state,
+        "face_encoder": _face_state,
         "models_lock_hash": load_lock().hash,
     }
 
@@ -302,6 +314,7 @@ def delete_movie(movie_id: str):
             conn.execute("DELETE FROM movies WHERE id=? OR merged_into=?", (movie_id, movie_id))
     dialogue.evict(movie_id)
     visual.evict(movie_id)
+    faces.evict(movie_id)
     shutil.rmtree(settings().movie_dir(movie_id), ignore_errors=True)
 
 
@@ -385,20 +398,60 @@ class SearchBody(BaseModel):
 @app.post("/movies/{movie_id}/search")
 async def search(movie_id: str, request: Request):
     ctype = request.headers.get("content-type", "")
+    image: bytes | None = None
     if ctype.startswith("multipart/"):
-        form = await request.form()
+        limit = int(settings().max_query_image_mb * 1024 * 1024)
+        too_big = FHError("image_too_big", f"That picture is over "
+                          f"{settings().max_query_image_mb:g} MB. Use a smaller one.",
+                          status=413)
+        if int(request.headers.get("content-length") or 0) > limit + 65536:
+            raise too_big
+        form = await request.form(max_files=1)
         raw = {k: v for k, v in form.items() if isinstance(v, str)}
         raw.setdefault("type", "image")
+        upload = form.get("image")
+        if upload is not None and not isinstance(upload, str):
+            image = await upload.read(limit + 1)
+            if len(image) > limit:
+                raise too_big
+    elif ctype.startswith("application/x-www-form-urlencoded"):
+        raw = {k: v for k, v in (await request.form()).items() if isinstance(v, str)}
     else:
-        raw = await request.json()
+        try:
+            raw = await request.json()
+        except ValueError as e:
+            raise FHError("bad_query", "That search couldn't be read.", detail=str(e)) from e
     try:
         body = SearchBody.model_validate(raw)
     except Exception as e:
         raise FHError("bad_query", "That search couldn't be read.", detail=str(e)) from e
-    return await run_in_threadpool(_search, movie_id, body)
+    return await run_in_threadpool(_search, movie_id, body, image)
 
 
-def _search(movie_id: str, body: SearchBody) -> dict:
+MAX_IMAGE_PIXELS = 50_000_000
+
+
+def _open_image(data: bytes):
+    """A query picture as RGB, upright (EXIF), and no bigger than 2048 px a side."""
+    import io
+
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    try:
+        im = Image.open(io.BytesIO(data))
+        if im.width * im.height > MAX_IMAGE_PIXELS:
+            raise FHError("bad_image", "That picture is too large. Use a smaller one.")
+        im = ImageOps.exif_transpose(im).convert("RGB")
+    except FHError:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as e:
+        raise FHError("bad_image", "That file isn't a picture FrameHound can read. "
+                      "Try a JPEG or PNG.", detail=str(e)) from e
+    im.thumbnail((2048, 2048))
+    return im
+
+
+def _search(movie_id: str, body: SearchBody, image: bytes | None = None) -> dict:
     s = settings()
     t0 = time.perf_counter()
     with db.db() as conn:
@@ -415,13 +468,17 @@ def _search(movie_id: str, body: SearchBody) -> dict:
     use_dialogue = body.type == "dialogue" or (
         body.type == "text" and (body.also_dialogue or dialogue.looks_like_quote(q)))
     if body.type == "image":
-        raise FHError("no_image_search", "Show a picture arrives in a later version. "
-                      "Describe it in words instead.", status=409)
+        if "visual" not in contents:
+            raise FHError("no_visual_index", "This movie was indexed for dialogue only, so "
+                          "Show a picture isn't available. Re-index it, or quote a line "
+                          "instead.", status=409)
+        if not image:
+            raise FHError("bad_query", "Choose a picture to find.")
     if body.type == "text" and "visual" not in contents and not use_dialogue:
         raise FHError("no_visual_index", "This movie was indexed for dialogue only, so "
                       "Describe it isn't available. Re-index it, or quote a line instead.",
                       status=409)
-    if not q:
+    if not q and body.type != "image":
         raise FHError("bad_query", "Type something to find.")
     if body.type == "dialogue" and "dialogue" not in contents:
         raise FHError("no_dialogue_index", "This movie has no dialogue index.", status=409)
@@ -432,15 +489,35 @@ def _search(movie_id: str, body: SearchBody) -> dict:
     index_dir = s.movie_dir(movie_id) / "index"
     results = []
     semantic = None
-    if body.type == "text" and "visual" in contents:
+    face_found = None
+    image_sha = None
+    if body.type in ("text", "image") and "visual" in contents:
         if _visual_state["state"] == "error":
-            raise FHError("encoder_unavailable", "Describe it is unavailable: the visual "
-                          "model didn't load on the server.", detail=_visual_state["error"],
-                          status=503)
-        from framehound_indexer.encoders import encode_text
-
+            raise FHError("encoder_unavailable", "Searching by what's on screen is "
+                          "unavailable: the visual model didn't load on the server.",
+                          detail=_visual_state["error"], status=503)
         vidx = visual.visual_index(movie_id, index_dir)
-        results.append(vidx.search(encode_text(q), duration, top_k, bins, s.z_min))
+        fidx = faces.face_index(movie_id, index_dir, vidx.times.size) \
+            if "faces" in contents else None
+        if body.type == "text":
+            from framehound_indexer.encoders import encode_text
+
+            results.append(vidx.search(encode_text(q), duration, top_k, bins, s.z_min,
+                                       faces=fidx))
+        else:
+            from framehound_indexer.encoders import encode_face, encode_image
+
+            image_sha = hashlib.sha256(image or b"").hexdigest()
+            im = _open_image(image or b"")
+            face_vec = None
+            if fidx is not None and _face_state["state"] != "error":
+                found = encode_face(im)
+                face_found = found is not None
+                face_vec = found[0] if found else None
+            results.append(vidx.search_image(
+                encode_image(im), face_vec, duration, top_k, bins, s.z_min, fidx,
+                match=float(load_lock().faces["match"]), bonus=s.face_bonus,
+                scale=s.face_scale))
     if use_dialogue and "dialogue" in contents:
         qvec = None
         if _encoder_state["state"] != "error":
@@ -456,11 +533,14 @@ def _search(movie_id: str, body: SearchBody) -> dict:
     result = _merge(results, top_k) if len(results) > 1 else results[0]
     latency = (time.perf_counter() - t0) * 1000
     with db.db() as conn:
-        conn.execute("INSERT INTO queries(id, movie_id, type, q, created_at, latency_ms) "
-                     "VALUES (?,?,?,?,?,?)",
-                     (db.new_id(), movie_id, body.type, q, db.now(), latency))
+        conn.execute("INSERT INTO queries(id, movie_id, type, q, image_sha, created_at, "
+                     "latency_ms) VALUES (?,?,?,?,?,?,?)",
+                     (db.new_id(), movie_id, body.type, q or None, image_sha, db.now(),
+                      latency))
     result["latency_ms"] = round(latency, 1)
     result["semantic"] = semantic
+    if body.type == "image":
+        result["face_found"] = face_found
     return result
 
 
@@ -487,14 +567,25 @@ class ClipBody(BaseModel):
     format: str = Field(default="mp4", pattern="^(mp4|gif)$")
     subs: bool = False
     crop: bool = False
+    # The face's box at the candidate's peak, as fractions of the frame (x, y, w, h).
+    face_bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
 
 
 @app.post("/movies/{movie_id}/clips", status_code=201)
 def make_clip(movie_id: str, body: ClipBody):
     s = settings()
-    if body.format != "mp4" or body.subs or body.crop:
-        raise FHError("unsupported_format", "GIF, subtitles and face crop arrive in a later "
-                      "version. Cut a plain video clip for now.")
+    if body.format != "mp4" or body.subs:
+        raise FHError("unsupported_format", "GIF and subtitles arrive in a later version. "
+                      "Cut a plain video clip for now.")
+    crop_box = None
+    if body.crop:
+        b = body.face_bbox
+        if not b or not all(0 <= v <= 1 for v in b) or b[2] <= 0 or b[3] <= 0 \
+                or b[0] + b[2] > 1.001 or b[1] + b[3] > 1.001:
+            raise FHError("bad_crop", "Crop to the face needs a face. Pick a Same face match.")
+        crop_box = json.dumps([round(v, 5) for v in b])
+    # Cropping re-encodes, so it is always exact.
+    mode = "accurate" if crop_box else body.mode
     dur = body.end - body.start
     if dur < 0.1:
         raise FHError("bad_span", "Set an out point after the in point.")
@@ -511,9 +602,9 @@ def make_clip(movie_id: str, body: ClipBody):
         job_id = jobs.create(conn, movie_id, "clip", ["cutting"])
         clip_id = db.new_id()
         conn.execute('INSERT INTO clips(id, movie_id, start, "end", mode, format, job_id, '
-                     "created_at) VALUES (?,?,?,?,?,?,?,?)",
+                     "created_at, crop_box) VALUES (?,?,?,?,?,?,?,?,?)",
                      (clip_id, movie_id, body.start, min(body.end, m["duration_s"] or body.end),
-                      body.mode, body.format, job_id, db.now()))
+                      mode, body.format, job_id, db.now(), crop_box))
     queue.enqueue("clip", job_id)
     return {"clip_id": clip_id, "job_id": job_id}
 
@@ -532,6 +623,7 @@ def get_clip(clip_id: str):
         j = db.row(conn, "SELECT * FROM jobs WHERE id=?", c["job_id"])
     return {"id": c["id"], "movie_id": c["movie_id"], "start": c["start"], "end": c["end"],
             "mode": c["mode"], "format": c["format"], "ready": bool(c["path"]),
+            "crop": bool(c["crop_box"]),
             "file_url": f"/clips/{c['id']}/file", "job": _job_out(j) if j else None}
 
 

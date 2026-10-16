@@ -76,7 +76,7 @@ def test_full_flow(data_dir, enqueued, client, monkeypatch):
     tasks.run_index(enqueued[-1][1])
     movie = client.get("/movies/mv1").json()
     assert movie["status"] == "ready", movie["error"]
-    assert movie["capabilities"] == {"dialogue": True, "visual": True, "faces": False}
+    assert movie["capabilities"] == {"dialogue": True, "visual": True, "faces": True}
     assert movie["thumbs"] == ["/media/mv1/thumbs/0.jpg", "/media/mv1/thumbs/1.jpg"]
     assert movie["models_ok"] is True
     assert not (data_dir / "work" / "mv1").exists()  # cleaned up

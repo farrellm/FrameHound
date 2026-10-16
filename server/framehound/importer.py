@@ -64,9 +64,19 @@ def import_bundle(movie_id: str, bundle_path: Path) -> dict:
                        f"manifest {counts}")
         if len(frames) != n_clip:
             raise _bad(f"frames table {len(frames)} != index {n_clip}")
+    faces: list[dict] = []
+    if "faces" in contents:
+        if "visual" not in contents:
+            raise _bad("faces without a visual index")
+        faces = pq.read_table(staging / bundle.FACES_TABLE).to_pylist()
+        n_faces = _ntotal(staging / bundle.FACES_INDEX)
+        if (len(faces), n_faces) != (counts.get("faces"), counts.get("faces_index")):
+            raise _bad(f"face counts {len(faces)}/{n_faces} don't match manifest {counts}")
+        if any(not 0 <= r["frame_row"] < len(frames) for r in faces):
+            raise _bad("a face points past the frames table")
 
     with db.db() as conn, db.tx(conn):
-        for table in ("transcript_segments", "transcript_fts", "shots", "frames"):
+        for table in ("transcript_segments", "transcript_fts", "shots", "frames", "faces"):
             conn.execute(f"DELETE FROM {table} WHERE movie_id=?", (movie_id,))
         conn.executemany(
             'INSERT INTO transcript_segments(movie_id, seg, start, "end", text, words_json) '
@@ -80,6 +90,10 @@ def import_bundle(movie_id: str, bundle_path: Path) -> dict:
                          [(movie_id, r["idx"], r["start"], r["end"]) for r in shots])
         conn.executemany("INSERT INTO frames(movie_id, row, t, shot_idx) VALUES (?,?,?,?)",
                          [(movie_id, r["row"], r["t"], r["shot_idx"]) for r in frames])
+        conn.executemany("INSERT INTO faces(movie_id, row, frame_row, x, y, w, h, det_score) "
+                         "VALUES (?,?,?,?,?,?,?,?)",
+                         [(movie_id, r["row"], r["frame_row"], r["x"], r["y"], r["w"], r["h"],
+                           r["det_score"]) for r in faces])
         conn.execute("UPDATE movies SET models_lock_hash=? WHERE id=?",
                      (manifest["models_lock_hash"], movie_id))
         live, old = mdir / "index", mdir / "index.old"

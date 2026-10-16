@@ -40,6 +40,11 @@ class Settings:
     heat_bins: int = field(default_factory=lambda: _int("HEAT_BINS", 512))
     top_k: int = field(default_factory=lambda: _int("TOP_K", 10))
     z_min: float = field(default_factory=lambda: _float("Z_MIN", 3.0))
+    # Show a picture (design.md §6): a face match scores Z_MIN + FACE_BONUS at the
+    # lock's match similarity, plus FACE_SCALE per unit of similarity above it.
+    face_bonus: float = field(default_factory=lambda: _float("FACE_BONUS", 2.0))
+    face_scale: float = field(default_factory=lambda: _float("FACE_SCALE", 20.0))
+    max_query_image_mb: float = field(default_factory=lambda: _float("MAX_QUERY_IMAGE_MB", 15))
     # Dev/test only: lets downloads reach private addresses (e.g. a local http.server).
     allow_private_urls: bool = field(default_factory=lambda: _bool("FH_ALLOW_PRIVATE_URLS", False))
     ffmpeg_cpu_s: int = field(default_factory=lambda: _int("FFMPEG_CPU_S", 6 * 3600))

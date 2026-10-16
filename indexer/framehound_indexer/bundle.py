@@ -17,6 +17,8 @@ SHOTS = "shots.parquet"
 FRAMES = "frames.parquet"
 CLIP_INDEX = "clip.faiss"
 THUMBS = "thumbs"
+FACES_TABLE = "faces.parquet"
+FACES_INDEX = "faces.faiss"
 BUNDLE_NAME = "index.tar.zst"
 
 

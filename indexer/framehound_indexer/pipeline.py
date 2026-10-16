@@ -14,15 +14,14 @@ job.json::
       "media": {"path": "/data/movies/.../source.mp4"}   # or {"url": ..., "sha256": ...}
       "duration_s": 5543.2,
       "models_lock": {...},          # the host's lock, so both sides agree
-      "stages": ["fetch", "shots", "visual", "audio", "sentences", "bundle"],
+      "stages": ["fetch", "shots", "visual", "faces", "audio", "sentences", "bundle"],
       "device": "auto",              # auto | cpu | cuda
       "zstd_level": 19
     }
 
 The audio lane (audio, sentences) runs in a thread alongside the visual lane
-(shots, visual): Whisper and SigLIP fit on one GPU together, and on a CPU the
-two lanes still overlap ffmpeg decoding with inference. The face stage
-arrives in M3.
+(shots, visual, faces): Whisper and the vision models fit on one GPU together,
+and on a CPU the two lanes still overlap ffmpeg decoding with inference.
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ import numpy as np
 from . import __version__, bundle
 from .lock import ModelsLock, load_lock
 
-DEFAULT_STAGES = ["fetch", "shots", "visual", "audio", "sentences", "bundle"]
+DEFAULT_STAGES = ["fetch", "shots", "visual", "faces", "audio", "sentences", "bundle"]
 AUDIO_LANE = {"audio", "sentences"}
 
 
@@ -390,6 +389,95 @@ def stage_visual(ctx: Ctx) -> None:
     )
 
 
+def stage_faces(ctx: Ctx) -> None:
+    """Decode at the visual ``fps`` again (so frame k is ``frames.parquet`` row k),
+    find faces with SCRFD, and embed each with ArcFace. Boxes are stored as
+    fractions of the frame, so a crop applies to the source at any resolution."""
+    import queue
+
+    import faiss
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from .faces import FaceEncoder, align, normalized_box
+    from .shots import even, probe, video_frames
+
+    cfg = ctx.lock.faces
+    fps = float(ctx.lock.visual.get("fps", 2))
+    n_frames = pq.read_metadata(ctx.work / bundle.FRAMES).num_rows
+    media = ctx.media()
+    p = probe(media)
+    duration = float(ctx.job.get("duration_s") or 0) or p.duration_s
+    h = even(min(int(cfg["decode_height"]), p.height))
+    w = even(h * p.aspect)
+    min_px = float(cfg["min_face_px"]) * h / int(cfg["decode_height"])
+    device = ctx.ort_device()
+    enc = FaceEncoder(ctx.lock, device=device)
+    det, _ = enc.sessions()
+    print(f"faces: onnxruntime providers {det.get_providers()}", file=sys.stderr, flush=True)
+    index = faiss.IndexFlatIP(enc.dim)
+    rows: dict[str, list] = {"frame_row": [], "x": [], "y": [], "w": [], "h": [],
+                             "det_score": []}
+    q: queue.Queue = queue.Queue(maxsize=4)
+
+    def produce() -> None:
+        try:
+            for frames in video_frames(media, f"fps={fps:g},scale={w}:{h}:flags=bicubic,"
+                                       "format=rgb24", w, h, hwaccel=device == "cuda",
+                                       batch=32):
+                q.put(frames)
+            q.put(None)
+        except BaseException as e:  # noqa: BLE001 (handed to the consumer)
+            q.put(e)
+
+    threading.Thread(target=produce, daemon=True).start()
+    k = 0
+    crops: list[np.ndarray] = []
+
+    def flush() -> None:
+        if crops:
+            index.add(np.ascontiguousarray(enc.embed(crops), dtype=np.float32))
+            crops.clear()
+
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        if isinstance(item, BaseException):
+            raise item
+        for frame in item:
+            # Frames past the visual index (a rounding difference at the end) are dropped.
+            if k < n_frames:
+                for face in enc.detect(frame):
+                    if face.size < min_px:
+                        continue
+                    x, y, bw, bh = normalized_box(face, w, h)
+                    rows["frame_row"].append(k)
+                    rows["x"].append(x)
+                    rows["y"].append(y)
+                    rows["w"].append(bw)
+                    rows["h"].append(bh)
+                    rows["det_score"].append(face.score)
+                    crops.append(align(frame, face))
+            k += 1
+        if len(crops) >= int(cfg.get("batch_size", 64)):
+            flush()
+        if duration:
+            ctx.progress.emit("faces", k / fps / duration)
+    flush()
+    n = len(rows["frame_row"])
+    if index.ntotal != n:
+        raise RuntimeError(f"faces: {index.ntotal} embeddings for {n} boxes")
+    faiss.write_index(index, str(ctx.work / bundle.FACES_INDEX))
+    pq.write_table(
+        pa.table({"row": pa.array(range(n), pa.int32()),
+                  "frame_row": pa.array(rows["frame_row"], pa.int32()),
+                  **{c: pa.array(rows[c], pa.float32()) for c in ("x", "y", "w", "h",
+                                                                 "det_score")}}),
+        ctx.work / bundle.FACES_TABLE,
+    )
+
+
 def stage_bundle(ctx: Ctx) -> None:
     import faiss
     import pyarrow.parquet as pq
@@ -415,6 +503,10 @@ def stage_bundle(ctx: Ctx) -> None:
         counts.update(shots=rows(bundle.SHOTS), frames=rows(bundle.FRAMES),
                       clip_index=ntotal(bundle.CLIP_INDEX),
                       thumbs=len(list((ctx.work / bundle.THUMBS).glob("*.jpg"))))
+    if (ctx.work / bundle.FACES_INDEX).exists():
+        names += [bundle.FACES_TABLE, bundle.FACES_INDEX]
+        contents.append("faces")
+        counts.update(faces=rows(bundle.FACES_TABLE), faces_index=ntotal(bundle.FACES_INDEX))
     durations = {}
     for marker in ctx.work.glob("*.done"):
         try:
@@ -442,6 +534,7 @@ STAGES: dict[str, Callable[[Ctx], None]] = {
     "fetch": stage_fetch,
     "shots": stage_shots,
     "visual": stage_visual,
+    "faces": stage_faces,
     "audio": stage_audio,
     "sentences": stage_sentences,
     "bundle": stage_bundle,

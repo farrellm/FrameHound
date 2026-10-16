@@ -16,16 +16,21 @@ export function ExportSheet({
   movie,
   start,
   end,
+  faceBox,
   onClose,
 }: {
   movie: Movie;
   start: number;
   end: number;
-  hasFace: boolean;
+  /** A Same face match's face at its peak; enables Crop to the face. */
+  faceBox: number[] | null;
   onClose: () => void;
 }) {
   const fps = movie.fps || 24;
   const [mode, setMode] = useState<"accurate" | "fast">("accurate");
+  const [crop, setCrop] = useState(false);
+  // Cropping re-encodes, so it always cuts exactly.
+  const effectiveMode = crop ? "accurate" : mode;
   const [phase, setPhase] = useState<Phase>({ kind: "choose" });
   const [file, setFile] = useState<File | null>(null);
   const stop = useRef<() => void>(undefined);
@@ -43,7 +48,12 @@ export function ExportSheet({
     setPhase({ kind: "cutting", pct: 0 });
     announce("Cutting");
     try {
-      const { clip_id, job_id } = await api.cutClip(movie.id, { start, end, mode });
+      const { clip_id, job_id } = await api.cutClip(movie.id, {
+        start,
+        end,
+        mode: effectiveMode,
+        ...(crop && faceBox ? { crop: true, face_bbox: faceBox } : {}),
+      });
       stop.current = followJob(job_id, (j) => {
         if (j.state === "done") {
           setPhase({ kind: "ready", clipId: clip_id });
@@ -150,7 +160,7 @@ export function ExportSheet({
               <input
                 type="radio"
                 name="mode"
-                checked={mode === "accurate"}
+                checked={effectiveMode === "accurate"}
                 onChange={() => setMode("accurate")}
               />
               <span>
@@ -158,12 +168,31 @@ export function ExportSheet({
               </span>
             </label>
             <label className="radio">
-              <input type="radio" name="mode" checked={mode === "fast"} onChange={() => setMode("fast")} />
+              <input
+                type="radio"
+                name="mode"
+                checked={effectiveMode === "fast"}
+                disabled={crop}
+                onChange={() => setMode("fast")}
+              />
               <span>
-                Quick <span className="hint">instant, may start a moment early</span>
+                Quick{" "}
+                <span className="hint">
+                  {crop ? "not available when cropping to the face" : "instant, may start a moment early"}
+                </span>
               </span>
             </label>
           </fieldset>
+          {faceBox && (
+            <fieldset disabled={phase.kind === "cutting"}>
+              <label className="radio">
+                <input type="checkbox" checked={crop} onChange={(e) => setCrop(e.target.checked)} />
+                <span>
+                  Crop to the face <span className="hint">portrait, framed on the face at the match</span>
+                </span>
+              </label>
+            </fieldset>
+          )}
           {phase.kind === "failed" && (
             <div role="alert">
               <p className="message danger">{phase.error.message}</p>

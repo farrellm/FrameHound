@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Draft |
 | **Author** | farrellm |
-| **Last updated** | 2026-10-15 |
+| **Last updated** | 2026-10-16 |
 
 ## 1. Overview
 
@@ -196,14 +196,16 @@ Each stage writes its output and a `.done` marker under `/content/fh/{id}/work/`
 | 0 | fetch | httpx download (public sources), SHA-256 verify | `media.*` |
 | 1 | shots | numpy port of PySceneDetect's `AdaptiveDetector` (HSV content change vs. its neighbours, ratio ≥ 3) over every frame decoded at 96 px by ffmpeg (NVDEC when available) | `shots.parquet (idx, start, end)` |
 | 2–3 | visual | one ffmpeg decode at **2 fps** (frames, visual and thumbs fused): squash to 384², **SigLIP 2 so400m** vision tower (ONNX fp16, CUDA), L2-normalize; each shot's thumbnail is the sampled frame nearest its middle | `clip.faiss` (IndexFlatIP), `frames.parquet (row, t, shot_idx)`, `thumbs/` |
-| 4 | faces | **InsightFace** `buffalo_l`: RetinaFace detect (det ≥ 0.6, min face 40 px) + ArcFace 512-d | `faces.faiss`, `faces.parquet (row, frame_row, bbox, det_score)` |
+| 4 | faces | **InsightFace** `buffalo_l` on ONNX Runtime: SCRFD detect over the same 2 fps frames decoded at 720p (det ≥ 0.6, min face 40 px) + ArcFace 512-d | `faces.faiss`, `faces.parquet (row, frame_row, x, y, w, h, det_score)` (box as fractions of the frame) |
 | 5 | audio | ffmpeg → 16 kHz mono; **faster-whisper large-v3**, `word_timestamps=True`, VAD filter | `transcript.parquet (seg, start, end, text, words_json)` |
 | 6 | sentences | **bge-small-en-v1.5** over transcript segments (plus 3-segment sliding windows) | `sentences.faiss` |
 | 8 | bundle | write `manifest.json`, `tar` + `zstd -19` | `index.tar.zst` |
 
-The visual stage decodes each sampled frame once for the embeddings and the thumbnails. The audio lane (audio, sentences) runs in a thread alongside the visual lane (shots, visual, and faces in M3), because Whisper and the vision models fit on the GPU together.
+The visual stage decodes each sampled frame once for the embeddings and the thumbnails. The faces stage decodes the same 2 fps samples again at a higher resolution (720p rather than 384²), so its frame `k` is `frames.parquet` row `k`. The audio lane (audio, sentences) runs in a thread alongside the visual lane (shots, visual, faces), because Whisper and the vision models fit on the GPU together.
 
 **Visual model.** SigLIP v1 so400m has no ONNX export, so the lock pins `onnx-community/siglip2-so400m-patch14-384-ONNX` (SigLIP 2, same size, better retrieval): the VM runs `vision_model_fp16.onnx`, the host `text_model.onnx` (about 2.2 GB of RAM; a query takes about 0.6 s with the 3-prompt ensemble). Text is lowercased and padded to 64 tokens, as SigLIP was trained. `models.tiny.lock` uses SigLIP base (224 px) for development.
+
+**Face models.** The lock pins `public-data/insightface`'s copy of the `buffalo_l` pack: `det_10g.onnx` (SCRFD, the detector with five landmarks) and `w600k_r50.onnx` (ArcFace). Both run directly on ONNX Runtime, without the `insightface` package (which needs a compiler); `framehound_indexer/faces.py` ports its SCRFD decoding, NMS and five-point alignment, with PIL's affine transform in place of OpenCV. The index and the query encoder share that code. Boxes are stored as fractions of the frame, so a face crop applies to the source at any resolution. InsightFace's pretrained models are licensed for non-commercial research use.
 
 **Size and time estimates for a 2-hour film.** 2 fps gives about 14.4k frames.
 
@@ -245,7 +247,7 @@ The host verifies `manifest.json`: the `models.lock` hash matches, and the row c
 
 ## 6. Stage 3 — Search (host CPU, in `api`)
 
-The query encoders load at startup: SigLIP text and image towers, ArcFace, and bge-small, about 2 GB of RAM in total. Encoding one query takes about 50–400 ms on a modern CPU. A brute-force inner-product search over 14k vectors takes under 5 ms.
+The query encoders load at startup: SigLIP text and image towers, ArcFace (with SCRFD), and bge-small, about 2 GB of RAM in total. A brute-force inner-product search over 14k vectors takes under 5 ms. Encoding dominates: measured on an 8-core host (2026-10), a Describe it query takes about 0.6–1.5 s (the 3-prompt ensemble), a face about 0.6 s, but the so400m vision tower takes about 5 s per picture, so **Show a picture runs about 4–6 s**, past the 1 s goal. The fp32 export is no faster than fp16 on a CPU, and the int8 export disagrees with fp16 (cosine 0.37), so neither helps; a smaller vision model would need a re-index of every movie.
 
 ### Query types
 
@@ -254,10 +256,11 @@ The query encoders load at startup: SigLIP text and image towers, ArcFace, and b
 2. Score every frame by cosine similarity to the averaged embedding.
 3. If the text reads like a quote (it has quotation marks, or the user toggled "also search dialogue"), also run the dialogue path and merge the results.
 
-**Image** (`type=image`):
-1. Visual score: the SigLIP image embedding against `clip.faiss`.
-2. If RetinaFace finds a face in the query image, also compute a face score: the ArcFace embedding against `faces.faiss`. Each frame takes the maximum over the faces in it, and similarity ≥ 0.40 counts as a match.
-3. Fuse the two: `score = max(z_visual, z_face + face_bonus)`. A face match is far more specific than general visual similarity, so it dominates when present.
+**Image** (`type=image`, multipart with an `image` file of at most `MAX_QUERY_IMAGE_MB`):
+1. Visual score: the SigLIP image embedding against `clip.faiss`, robust-z normalized as below.
+2. If SCRFD finds a face in the query image (retrying at 576 down to 320 px, since a close-up can fill the detector), the largest one's ArcFace embedding is scored against `faces.faiss`. Each frame takes the maximum over the faces in it, and similarity ≥ 0.40 (`match` in the lock) counts as a match.
+3. Fuse the two: `z = max(z_visual, z_face)`, where a matching frame's `z_face = Z_MIN + FACE_BONUS + (sim − 0.40)·FACE_SCALE` (defaults 2 and 20). Raw ArcFace similarities don't suit the median/MAD normalization (most frames have no face), so this calibrated map stands in for `z_face + face_bonus`: every true face match clears the threshold, and a face match is far more specific than general visual similarity, so it dominates when present.
+4. A candidate whose peak frame holds a matching face has `reason: face` and that face's `face_bbox`. The response's `face_found` says whether the picture had a face (null when the movie has no face index), so the UI can explain a looks-only result.
 
 **Dialogue** (`type=dialogue`):
 1. **Lexical.** `rapidfuzz.fuzz.partial_ratio` of the normalized query against each segment and each 3-segment window, keeping matches at 85 or above.
@@ -294,7 +297,7 @@ Options:
 
 - **GIF.** Two passes, with `fps=12,scale=480:-1:flags=lanczos,palettegen` followed by `paletteuse=dither=sierra2_4a`. Capped at 15 s.
 - **Burn-in subtitles.** The worker writes the transcript words inside `[start, end]` to an `.srt` file, with timestamps shifted so the clip starts at 0, then applies `-vf subtitles=clip.srt`.
-- **Face crop.** For face hits, crop to the face's bounding box expanded 2.5× and clamped to 9:16 or 1:1, using `crop=` with a fixed box taken at `peak_t`. Tracking a moving face is out of scope for v1.
+- **Face crop.** For face hits, crop to the face's bounding box expanded 2.5× around its centre, grown to portrait 9:16, or to 1:1 when 9:16 doesn't fit the frame's height (shrunk to fit if neither does), kept inside the frame, with even dimensions. It uses `crop=` with a fixed box taken at `peak_t`, which the client sends as `face_bbox`. Cropping re-encodes, so it always cuts in accurate mode. Tracking a moving face is out of scope for v1.
 - **Limits.** Clips are at most `MAX_CLIP_S` (default 120 s). Outputs are served with HTTP Range support and garbage-collected after `CLIP_TTL`.
 
 ## 8. API
@@ -310,8 +313,8 @@ Options:
 | `POST /jobs/{id}/cancel` | — | `202` (also stops the Colab session) |
 | `GET /movies/{id}/index-progress` | — | snapshot of every index stage `{stage, state: pending\|running\|done\|failed, pct, eta_s}` plus `gpu` and `compute_units_used`; the UI calls it when a page resumes, then reopens SSE |
 | `GET /movies/{id}/shots` | `?from=&to=` (seconds; default whole movie) | `[{idx, start, end, thumb_url}]` for the strip at the current zoom |
-| `POST /movies/{id}/search` | `{type: text\|image\|dialogue, q?, image? (multipart), top_k?, also_dialogue?, heat_bins?}` | `{candidates: [...], heat: [...]}` (see §6 for candidate fields) |
-| `POST /movies/{id}/clips` | `{start, end, mode: accurate\|fast, format: mp4\|gif, subs?, crop?}` | `{clip_id, job_id}` |
+| `POST /movies/{id}/search` | `{type: text\|image\|dialogue, q?, image? (multipart), top_k?, also_dialogue?, heat_bins?}` | `{candidates: [...], heat: [...], face_found?}` (see §6 for candidate fields) |
+| `POST /movies/{id}/clips` | `{start, end, mode: accurate\|fast, format: mp4\|gif, subs?, crop?, face_bbox?}` (`face_bbox` is the candidate's, required with `crop`) | `{clip_id, job_id}` |
 | `GET /clips/{id}` | — | clip metadata, `ready`, and its job |
 | `GET /clips/{id}/file` | — | the clip (Range-enabled) |
 | `GET /jobs/{id}` | — | job state with per-stage progress |
@@ -340,7 +343,8 @@ faces(movie_id, row INT, frame_row INT, x, y, w, h, det_score REAL,
 transcript_segments(movie_id, seg INT, start REAL, end REAL, text TEXT,
                     words_json TEXT, PRIMARY KEY(movie_id, seg))
 queries(id PK, movie_id, type, q, image_sha, created_at, latency_ms)
-clips(id PK, movie_id, start REAL, end REAL, mode, format, path, created_at)
+clips(id PK, movie_id, start REAL, end REAL, mode, format, path, job_id, created_at,
+      crop_box TEXT /* JSON [x, y, w, h], fractions of the frame */)
 ```
 
 `transcript_segments` also gets an FTS5 virtual table, which is used for fast exact-phrase prefiltering before the fuzzy match.
@@ -399,7 +403,7 @@ clip:    queued → cutting → ready | failed
 |---|---|
 | **M1 — Skeleton** (done) | Compose stack, HTTP + archive.org ingest (incl. collection picker), proxy, `LocalIndexBackend` with transcript only, dialogue search, accurate MP4 clip. |
 | **M2 — Colab + visual** (done) | `ColabIndexBackend` (provision → detached run → poll → fetch → stop, reconciler, budget), shots + SigLIP, text search, timeline/heat-map UI. |
-| **M3 — Faces & images** | InsightFace stage, image/face search and fusion, face crop export. |
+| **M3 — Faces & images** (done) | InsightFace stage, image/face search and fusion, face crop export. |
 | **M4 — Torrents & polish** | libtorrent ingest + proxy upload path, GIF and subtitle export, optional VLM reranker, eviction, token auth. |
 
 ## 13. Risks and open questions

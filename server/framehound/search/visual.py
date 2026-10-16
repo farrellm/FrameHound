@@ -14,6 +14,7 @@ import numpy as np
 from framehound_indexer import bundle
 
 from .. import db
+from .faces import FaceIndex
 from .heat import max_pool, nms, robust_z, spans_to_series
 
 SMOOTH_S = 1.0
@@ -132,15 +133,44 @@ class VisualIndex:
         return [thumb_url(self.movie_id, i) for i in hit]
 
     def search(self, qvec: np.ndarray, duration_s: float, top_k: int, heat_bins: int,
-               z_min: float) -> dict:
-        raw = self.scores(qvec)
-        z = robust_z(raw)
+               z_min: float, faces: FaceIndex | None = None) -> dict:
+        """Describe it: the query vector against every frame."""
+        return self.rank(robust_z(self.scores(qvec)), duration_s, top_k, heat_bins, z_min,
+                         faces=faces)
+
+    def search_image(self, svec: np.ndarray, face_vec: np.ndarray | None, duration_s: float,
+                     top_k: int, heat_bins: int, z_min: float, faces: FaceIndex | None,
+                     match: float, bonus: float, scale: float) -> dict:
+        """Show a picture: SigLIP looks, fused with ArcFace identity when the picture
+        has a face and the movie has a face index."""
+        z = robust_z(self.scores(svec))
+        face_sims = face_rows = None
+        if face_vec is not None and faces is not None:
+            face_sims, face_rows = faces.match(face_vec)
+            z, _ = fuse(z, face_sims, match, z_min, bonus, scale)
+        return self.rank(z, duration_s, top_k, heat_bins, z_min, faces=faces,
+                         face_sims=face_sims, face_rows=face_rows, match=match)
+
+    def rank(self, z: np.ndarray, duration_s: float, top_k: int, heat_bins: int, z_min: float,
+             faces: FaceIndex | None = None, face_sims: np.ndarray | None = None,
+             face_rows: np.ndarray | None = None, match: float = 1.0) -> dict:
+        """Frame z-scores → candidates and the heat series. A candidate whose peak frame
+        holds a face matching the query (``face_sims`` ≥ ``match``) is a face hit."""
         segs, thr, zs = segments(z, self.times, self.shots, duration_s, z_min)
-        cands = [{
-            "start": round(s.start, 3), "end": round(s.end, 3), "score": round(s.score, 4),
-            "peak_t": round(s.peak_t, 3), "reason": "visual",
-            "thumbs": self.thumbs(*s.core), "has_face": False,
-        } for s in segs]
+        cands = []
+        for s in segs:
+            p = int(np.clip(np.searchsorted(self.times, s.peak_t - 1e-6), 0,
+                            max(self.times.size - 1, 0)))
+            c = {"start": round(s.start, 3), "end": round(s.end, 3), "score": round(s.score, 4),
+                 "peak_t": round(s.peak_t, 3), "reason": "visual",
+                 "thumbs": self.thumbs(*s.core),
+                 "has_face": bool(faces is not None and p < faces.has_face.size
+                                  and faces.has_face[p])}
+            if face_sims is not None and face_rows is not None and face_sims[p] >= match:
+                c["reason"] = "face"
+                c["face_bbox"] = faces.box(int(face_rows[p])) if faces else None
+                c["has_face"] = True
+            cands.append(c)
         cands = nms(cands)[:top_k]
         dt = float(np.median(np.diff(self.times))) if self.times.size > 1 else 0.5
         series = spans_to_series([(float(t), float(t) + dt, float(v))
@@ -149,6 +179,18 @@ class VisualIndex:
                                  duration_s or float(self.times[-1] + dt))
         return {"candidates": cands, "heat": max_pool(series, heat_bins),
                 "heat_threshold": round(thr, 3)}
+
+
+def fuse(z_visual: np.ndarray, face_sims: np.ndarray, match: float, z_min: float,
+         bonus: float, scale: float) -> tuple[np.ndarray, np.ndarray]:
+    """``max(z_visual, z_face)``, where a face at or above ``match`` scores
+    ``z_min + bonus + (sim − match)·scale``: identity is far more specific than looks,
+    so every true face match clears the threshold and outranks looks alone.
+
+    Returns the fused z and a mask of the frames whose score came from the face."""
+    z_face = np.where(face_sims >= match, z_min + bonus + (face_sims - match) * scale, -np.inf)
+    from_face = z_face > z_visual
+    return np.where(from_face, z_face, z_visual).astype(np.float32), from_face
 
 
 def thumb_url(movie_id: str, shot_idx: int) -> str:

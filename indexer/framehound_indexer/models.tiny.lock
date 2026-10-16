@@ -46,5 +46,19 @@
     "min_content": 15.0,
     "window": 2,
     "min_shot_s": 0.6
+  },
+  "faces": {
+    "repo": "public-data/insightface",
+    "revision": "33c1063c49c785b7652d3fd529f86fa4f149392b",
+    "detector_file": "models/buffalo_l/det_10g.onnx",
+    "recognizer_file": "models/buffalo_l/w600k_r50.onnx",
+    "det_size": 640,
+    "det_score": 0.6,
+    "nms": 0.4,
+    "min_face_px": 40,
+    "decode_height": 480,
+    "dim": 512,
+    "match": 0.4,
+    "batch_size": 64
   }
 }
