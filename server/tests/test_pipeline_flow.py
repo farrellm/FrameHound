@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from framehound import db, index_backend, queue, tasks
@@ -16,7 +17,7 @@ FAKE = [sys.executable, str(Path(__file__).with_name("fake_indexer.py"))]
 def enqueued(monkeypatch):
     calls = []
     monkeypatch.setattr(queue, "enqueue", lambda kind, job_id: calls.append((kind, job_id)))
-    monkeypatch.setattr(tasks, "get_backend", lambda: _fast_backend())
+    monkeypatch.setattr(tasks, "get_backend", lambda name=None: _fast_backend())
     return calls
 
 
@@ -54,7 +55,7 @@ def add_local_movie(data_dir: Path, mid: str = "mv1") -> str:
     return job_id
 
 
-def test_full_flow(data_dir, enqueued, client):
+def test_full_flow(data_dir, enqueued, client, monkeypatch):
     ingest_job = add_local_movie(data_dir)
     tasks.run_ingest(ingest_job)
     with db.db() as conn:
@@ -75,7 +76,8 @@ def test_full_flow(data_dir, enqueued, client):
     tasks.run_index(enqueued[-1][1])
     movie = client.get("/movies/mv1").json()
     assert movie["status"] == "ready", movie["error"]
-    assert movie["capabilities"] == {"dialogue": True, "visual": False, "faces": False}
+    assert movie["capabilities"] == {"dialogue": True, "visual": True, "faces": False}
+    assert movie["thumbs"] == ["/media/mv1/thumbs/0.jpg", "/media/mv1/thumbs/1.jpg"]
     assert movie["models_ok"] is True
     assert not (data_dir / "work" / "mv1").exists()  # cleaned up
 
@@ -86,8 +88,20 @@ def test_full_flow(data_dir, enqueued, client):
     assert [w["word"] for w in top["matched_words"]] == ["never", "come", "back"]
     assert len(r.json()["heat"]) == 64
 
-    r = client.post("/movies/mv1/search", json={"type": "text", "q": "a red hat"})
-    assert r.status_code == 409 and r.json()["code"] == "no_visual_index"
+    # Text search: the fake index's frame 5 (t=2.5 s, shot 1) is e_5.
+    from framehound_indexer import encoders
+
+    monkeypatch.setattr(encoders, "encode_text",
+                        lambda q: np.eye(16, dtype=np.float32)[5])
+    r = client.post("/movies/mv1/search", json={"type": "text", "q": "a red hat",
+                                                 "heat_bins": 64})
+    assert r.status_code == 200, r.text
+    top = r.json()["candidates"][0]
+    assert top["reason"] == "visual" and top["peak_t"] == 2.5
+    assert top["start"] <= 2.0 <= top["end"] and top["thumbs"] == ["/media/mv1/thumbs/1.jpg"]
+    assert client.get("/media/mv1/thumbs/1.jpg").status_code == 200
+    shots = client.get("/movies/mv1/shots", params={"from": 2.5, "to": 9}).json()
+    assert [s["idx"] for s in shots] == [1]
 
     r = client.post("/movies/mv1/clips", json={"start": 1.0, "end": 3.0})
     assert r.status_code == 201, r.text
@@ -113,8 +127,8 @@ def test_index_failure_is_recorded(data_dir, enqueued, client, monkeypatch):
     index_job = enqueued[-1][1]
     orig = index_backend.LocalIndexBackend.start
 
-    def start_failing(self, job_id, spec):
-        return orig(self, job_id, {**spec, "fail": True})
+    def start_failing(self, job, spec, attempt=0):
+        return orig(self, job, {**spec, "fail": True}, attempt)
 
     monkeypatch.setattr(index_backend.LocalIndexBackend, "start", start_failing)
     tasks.run_index(index_job)

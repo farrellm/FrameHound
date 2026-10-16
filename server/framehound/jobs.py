@@ -62,6 +62,17 @@ class Job:
         self._hb.start()
         return True
 
+    def resume(self) -> bool:
+        """Re-claim a job left running by a worker that restarted (Colab re-attach)."""
+        cur = self.conn.execute(
+            "UPDATE jobs SET heartbeat_at=?, seq=seq+1 WHERE id=? AND state='running' "
+            "AND cancel_requested=0", (db.now(), self.id))
+        if cur.rowcount == 0:
+            return False
+        self._hb = threading.Thread(target=self._heartbeat, daemon=True)
+        self._hb.start()
+        return True
+
     def _heartbeat(self) -> None:
         conn = db.connect()
         try:

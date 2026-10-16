@@ -14,13 +14,15 @@ job.json::
       "media": {"path": "/data/movies/.../source.mp4"}   # or {"url": ..., "sha256": ...}
       "duration_s": 5543.2,
       "models_lock": {...},          # the host's lock, so both sides agree
-      "stages": ["fetch", "audio", "sentences", "bundle"],
+      "stages": ["fetch", "shots", "visual", "audio", "sentences", "bundle"],
       "device": "auto",              # auto | cpu | cuda
       "zstd_level": 19
     }
 
-M1 implements the transcript-only stages; shots, frames, visual, faces and
-thumbs arrive in M2 and M3.
+The audio lane (audio, sentences) runs in a thread alongside the visual lane
+(shots, visual): Whisper and SigLIP fit on one GPU together, and on a CPU the
+two lanes still overlap ffmpeg decoding with inference. The face stage
+arrives in M3.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -42,7 +45,8 @@ import numpy as np
 from . import __version__, bundle
 from .lock import ModelsLock, load_lock
 
-DEFAULT_STAGES = ["fetch", "audio", "sentences", "bundle"]
+DEFAULT_STAGES = ["fetch", "shots", "visual", "audio", "sentences", "bundle"]
+AUDIO_LANE = {"audio", "sentences"}
 
 
 class Progress:
@@ -52,8 +56,13 @@ class Progress:
         self.fh = open(path, "a", buffering=1)  # noqa: SIM115 (lives for the run)
         self.started: dict[str, float] = {}
         self.last: dict[str, float] = {}
+        self.lock = threading.Lock()
 
     def emit(self, stage: str, pct: float, state: str = "running", force: bool = False, **kw):
+        with self.lock:
+            self._emit(stage, pct, state, force, **kw)
+
+    def _emit(self, stage: str, pct: float, state: str, force: bool, **kw):
         now = time.time()
         start = self.started.setdefault(stage, now)
         if not force and state == "running" and now - self.last.get(stage, 0) < 1.0:
@@ -94,6 +103,19 @@ class Ctx:
             return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
         except Exception:  # noqa: BLE001 (no usable CUDA runtime)
             return "cpu"
+
+
+    def ort_device(self) -> str:
+        """Where SigLIP runs: CUDA if requested/available to onnxruntime."""
+        want = self.job.get("device", "auto")
+        if want == "cpu":
+            return "cpu"
+        from .encoders import preload_cuda, providers
+
+        if want == "auto" and self.device() != "cuda":
+            return "cpu"
+        preload_cuda()
+        return "cuda" if "CUDAExecutionProvider" in providers("cuda") else "cpu"
 
 
 def _sha256(path: Path) -> str:
@@ -204,6 +226,7 @@ def stage_audio(ctx: Ctx) -> None:
     )
     audio = np.fromfile(raw, dtype=np.float32)
     device = ctx.device()
+    print(f"audio: whisper on {device}", file=sys.stderr, flush=True)
     try:
         rows = _transcribe(ctx, audio, device)
     except RuntimeError as e:
@@ -253,16 +276,145 @@ def stage_sentences(ctx: Ctx) -> None:
     )
 
 
+def stage_shots(ctx: Ctx) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from .shots import detect_shots
+
+    shots = detect_shots(ctx.media(), ctx.lock.shots, float(ctx.job.get("duration_s") or 0),
+                         hwaccel=ctx.device() == "cuda",
+                         on_progress=lambda f: ctx.progress.emit("shots", f))
+    pq.write_table(
+        pa.table({"idx": pa.array(range(len(shots)), pa.int32()),
+                  "start": pa.array([a for a, _ in shots], pa.float64()),
+                  "end": pa.array([b for _, b in shots], pa.float64())}),
+        ctx.work / bundle.SHOTS,
+    )
+
+
+THUMB_W = 320
+
+
+def stage_visual(ctx: Ctx) -> None:
+    """Decode at ``fps`` once: SigLIP embeddings for every frame, plus each shot's
+    thumbnail (the sampled frame nearest its middle)."""
+    import queue
+
+    import faiss
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from PIL import Image
+
+    from .encoders import VisualEncoder
+    from .shots import even, probe, video_frames
+
+    cfg = ctx.lock.visual
+    fps = float(cfg.get("fps", 2))
+    media = ctx.media()
+    p = probe(media)
+    duration = float(ctx.job.get("duration_s") or 0) or p.duration_s
+    shots = pq.read_table(ctx.work / bundle.SHOTS).to_pydict()
+    starts = np.asarray(shots["start"], dtype=np.float64)
+    size = int(cfg["image_size"])
+    h = max(size, THUMB_W * 9 // 16)
+    w = even(h * p.aspect)
+    h = even(h)
+    thumbs_dir = ctx.work / bundle.THUMBS
+    thumbs_dir.mkdir(exist_ok=True)
+    # Frame k is at k / fps; each shot's thumbnail is the frame nearest its middle.
+    want: dict[int, list[int]] = {}
+    for idx, (a, b) in enumerate(zip(shots["start"], shots["end"], strict=True)):
+        k = round((a + b) / 2 * fps)
+        k = min(max(k, int(np.ceil(a * fps))), max(int(np.floor(b * fps - 1e-9)), 0))
+        want.setdefault(max(k, 0), []).append(idx)
+
+    device = ctx.ort_device()
+    enc = VisualEncoder(ctx.lock, device=device)
+    print(f"visual: onnxruntime providers {enc.vision_session().get_providers()}",
+          file=sys.stderr, flush=True)
+    batch = int(cfg.get("batch_size", 32)) if device == "cuda" else 16
+    index = faiss.IndexFlatIP(enc.dim)
+    q: queue.Queue = queue.Queue(maxsize=4)
+    # Fit thumbnails in a THUMB_W box (a portrait source stays portrait).
+    tw, th = (THUMB_W, even(THUMB_W / p.aspect)) if p.aspect >= 1 else \
+        (even(THUMB_W * p.aspect), THUMB_W)
+
+    def save_thumb(frame: np.ndarray, idxs: list[int]) -> None:
+        im = Image.fromarray(frame).resize((tw, th), Image.BILINEAR)
+        for i in idxs:
+            im.save(thumbs_dir / f"{i}.jpg", quality=80)
+
+    def produce() -> None:
+        # Decoding, thumbnails and resizing overlap with inference.
+        try:
+            k = 0
+            for frames in video_frames(media, f"fps={fps:g},scale={w}:{h}:flags=bicubic,"
+                                       "format=rgb24", w, h, hwaccel=device == "cuda",
+                                       batch=batch):
+                for f in frames:
+                    if k in want:
+                        save_thumb(f, want.pop(k))
+                    k += 1
+                q.put((frames[-1], enc.preprocess(list(frames)), len(frames)))
+            q.put(None)
+        except BaseException as e:  # noqa: BLE001 (handed to the consumer)
+            q.put(e)
+
+    threading.Thread(target=produce, daemon=True).start()
+    n = 0
+    last = None
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        if isinstance(item, BaseException):
+            raise item
+        last, pixels, count = item
+        index.add(np.ascontiguousarray(enc.encode_pixels(pixels), dtype=np.float32))
+        n += count
+        if duration:
+            ctx.progress.emit("visual", n / fps / duration)
+    if last is not None:
+        for idxs in want.values():  # shots past the last sampled frame
+            save_thumb(last, idxs)
+    if n == 0:
+        raise RuntimeError("no frames decoded")
+    t = np.arange(n, dtype=np.float64) / fps
+    shot_idx = np.clip(np.searchsorted(starts, t, side="right") - 1, 0, max(len(starts) - 1, 0))
+    faiss.write_index(index, str(ctx.work / bundle.CLIP_INDEX))
+    pq.write_table(
+        pa.table({"row": pa.array(range(n), pa.int32()), "t": pa.array(t, pa.float64()),
+                  "shot_idx": pa.array(shot_idx, pa.int32())}),
+        ctx.work / bundle.FRAMES,
+    )
+
+
 def stage_bundle(ctx: Ctx) -> None:
     import faiss
     import pyarrow.parquet as pq
 
-    names = [bundle.TRANSCRIPT, bundle.SENTENCES_TABLE, bundle.SENTENCES_INDEX]
-    counts = {
-        "transcript_segments": pq.read_metadata(ctx.work / bundle.TRANSCRIPT).num_rows,
-        "sentences": pq.read_metadata(ctx.work / bundle.SENTENCES_TABLE).num_rows,
-        "sentences_index": faiss.read_index(str(ctx.work / bundle.SENTENCES_INDEX)).ntotal,
-    }
+    def rows(name: str) -> int:
+        return pq.read_metadata(ctx.work / name).num_rows
+
+    def ntotal(name: str) -> int:
+        return faiss.read_index(str(ctx.work / name), faiss.IO_FLAG_MMAP).ntotal
+
+    names: list[str] = []
+    contents: list[str] = []
+    counts: dict[str, int] = {}
+    if (ctx.work / bundle.SENTENCES_INDEX).exists():
+        names += [bundle.TRANSCRIPT, bundle.SENTENCES_TABLE, bundle.SENTENCES_INDEX]
+        contents.append("dialogue")
+        counts.update(transcript_segments=rows(bundle.TRANSCRIPT),
+                      sentences=rows(bundle.SENTENCES_TABLE),
+                      sentences_index=ntotal(bundle.SENTENCES_INDEX))
+    if (ctx.work / bundle.CLIP_INDEX).exists():
+        names += [bundle.SHOTS, bundle.FRAMES, bundle.CLIP_INDEX, bundle.THUMBS]
+        contents.append("visual")
+        counts.update(shots=rows(bundle.SHOTS), frames=rows(bundle.FRAMES),
+                      clip_index=ntotal(bundle.CLIP_INDEX),
+                      thumbs=len(list((ctx.work / bundle.THUMBS).glob("*.jpg"))))
     durations = {}
     for marker in ctx.work.glob("*.done"):
         try:
@@ -276,7 +428,7 @@ def stage_bundle(ctx: Ctx) -> None:
         "models_lock_hash": ctx.lock.hash,
         "models_lock": ctx.lock.data,
         "created_at": time.time(),
-        "contents": ["dialogue"],
+        "contents": contents,
         "counts": counts,
         "durations_s": durations,
         "files": names,
@@ -288,10 +440,24 @@ def stage_bundle(ctx: Ctx) -> None:
 
 STAGES: dict[str, Callable[[Ctx], None]] = {
     "fetch": stage_fetch,
+    "shots": stage_shots,
+    "visual": stage_visual,
     "audio": stage_audio,
     "sentences": stage_sentences,
     "bundle": stage_bundle,
 }
+
+
+def _run_stage(ctx: Ctx, stage: str) -> None:
+    marker = ctx.work / f"{stage}.done"
+    if marker.exists():
+        ctx.progress.emit(stage, 1.0, state="done", force=True, resumed=True)
+        return
+    ctx.progress.emit(stage, 0.0, force=True)
+    t0 = time.time()
+    STAGES[stage](ctx)
+    marker.write_text(f"{time.time() - t0:.3f}")
+    ctx.progress.emit(stage, 1.0, state="done", force=True)
 
 
 def run(job_path: str | os.PathLike[str]) -> None:
@@ -302,19 +468,44 @@ def run(job_path: str | os.PathLike[str]) -> None:
     lock = ModelsLock(job["models_lock"]) if "models_lock" in job else load_lock()
     progress = Progress(out / "progress.jsonl")
     ctx = Ctx(job=job, work=work, out=out, lock=lock, progress=progress)
+    stages = job.get("stages", DEFAULT_STAGES)
     try:
-        for stage in job.get("stages", DEFAULT_STAGES):
+        for stage in stages:
             if stage not in STAGES:
                 raise ValueError(f"unknown stage {stage!r}")
-            marker = work / f"{stage}.done"
-            if marker.exists():
-                progress.emit(stage, 1.0, state="done", force=True, resumed=True)
-                continue
-            progress.emit(stage, 0.0, force=True)
-            t0 = time.time()
-            STAGES[stage](ctx)
-            marker.write_text(f"{time.time() - t0:.3f}")
-            progress.emit(stage, 1.0, state="done", force=True)
+        # fetch first, bundle last; between them the audio lane runs in a thread.
+        head = [st for st in stages if st == "fetch"]
+        tail = [st for st in stages if st == "bundle"]
+        middle = [st for st in stages if st not in ("fetch", "bundle")]
+        audio = [st for st in middle if st in AUDIO_LANE]
+        visual = [st for st in middle if st not in AUDIO_LANE]
+        for stage in head:
+            _run_stage(ctx, stage)
+        failure: list[BaseException] = []
+
+        def audio_lane() -> None:
+            try:
+                for stage in audio:
+                    _run_stage(ctx, stage)
+            except BaseException as e:  # noqa: BLE001 (re-raised on the main thread)
+                failure.append(e)
+
+        lane = None
+        if audio and visual and job.get("parallel", True):
+            lane = threading.Thread(target=audio_lane, name="audio-lane", daemon=True)
+            lane.start()
+        else:
+            visual = middle
+        for stage in visual:
+            if failure:
+                break
+            _run_stage(ctx, stage)
+        if lane is not None:
+            lane.join()
+        if failure:
+            raise failure[0]
+        for stage in tail:
+            _run_stage(ctx, stage)
         progress.emit("done", 1.0, state="done", force=True)
     except BaseException as e:
         progress.emit("error", 0.0, state="failed", force=True, message=f"{type(e).__name__}: {e}")
@@ -325,4 +516,9 @@ def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) != 1:
         sys.exit("usage: python -m framehound_indexer job.json")
-    run(argv[0])
+    try:
+        run(argv[0])
+    except BaseException:  # noqa: BLE001 (the error line is already written)
+        # A still-running audio thread (Whisper) must not keep a failed run alive.
+        sys.stderr.flush()
+        os._exit(1)

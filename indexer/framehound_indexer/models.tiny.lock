@@ -14,5 +14,37 @@
     "max_length": 256,
     "pooling": "cls",
     "dim": 384
+  },
+  "visual": {
+    "repo": "Xenova/siglip-base-patch16-224",
+    "revision": "4649052661e53c7000355844105f8a1792088239",
+    "text_file": "onnx/text_model.onnx",
+    "vision_file": "onnx/vision_model.onnx",
+    "image_size": 224,
+    "resample": "bicubic",
+    "mean": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "std": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "text_max_length": 64,
+    "pad_token": "</s>",
+    "lowercase": true,
+    "dim": 768,
+    "fps": 2,
+    "batch_size": 32
+  },
+  "shots": {
+    "detector": "adaptive-content",
+    "width": 96,
+    "ratio": 3.0,
+    "min_content": 15.0,
+    "window": 2,
+    "min_shot_s": 0.6
   }
 }

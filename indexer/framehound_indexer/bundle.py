@@ -13,6 +13,10 @@ MANIFEST = "manifest.json"
 TRANSCRIPT = "transcript.parquet"
 SENTENCES_TABLE = "sentences.parquet"
 SENTENCES_INDEX = "sentences.faiss"
+SHOTS = "shots.parquet"
+FRAMES = "frames.parquet"
+CLIP_INDEX = "clip.faiss"
+THUMBS = "thumbs"
 BUNDLE_NAME = "index.tar.zst"
 
 

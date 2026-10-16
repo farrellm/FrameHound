@@ -14,6 +14,7 @@ def fixture_json(name: str):
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("FH_SKIP_ENCODERS", "1")
+    monkeypatch.setenv("INDEX_BACKEND", "local")
     monkeypatch.delenv("REDIS_URL", raising=False)
     monkeypatch.delenv("FH_ALLOW_PRIVATE_URLS", raising=False)
     from framehound import config, db

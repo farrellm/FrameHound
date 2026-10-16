@@ -76,6 +76,18 @@ export interface Candidate {
   text?: string;
 }
 
+export interface Shot {
+  idx: number;
+  start: number;
+  end: number;
+  thumb_url: string;
+}
+
+export interface Health {
+  colab: { state: "ok" | "auth_broken" | "error" | "not_configured"; balance_cu?: number; error?: string };
+  index_backend: string;
+}
+
 export interface SearchResult {
   candidates: Candidate[];
   heat: number[];
@@ -120,6 +132,10 @@ export class ApiError extends Error {
 
 const BASE = "/api";
 
+// The api returns media paths relative to itself; the SPA reaches it under /api.
+const media = (u: string) => (u.startsWith("/") ? BASE + u : u);
+const withThumbs = <T extends { thumbs: string[] }>(x: T): T => ({ ...x, thumbs: x.thumbs.map(media) });
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
@@ -141,8 +157,12 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api = {
-  movies: () => req<{ movies: Movie[] }>("GET", "/movies"),
-  movie: (id: string) => req<Movie>("GET", `/movies/${id}`),
+  movies: () =>
+    req<{ movies: Movie[] }>("GET", "/movies").then((r) => ({ movies: r.movies.map(withThumbs) })),
+  movie: (id: string) => req<Movie>("GET", `/movies/${id}`).then(withThumbs),
+  shots: (id: string) =>
+    req<Shot[]>("GET", `/movies/${id}/shots`).then((r) => r.map((s) => ({ ...s, thumb_url: media(s.thumb_url) }))),
+  health: () => req<Health>("GET", "/health"),
   addMovie: (source: string) =>
     req<{ movie_id: string; job_id: string } | CollectionResult>("POST", "/movies", { source }),
   collection: (id: string, q: string) =>
@@ -151,7 +171,10 @@ export const api = {
   remove: (id: string) => req<void>("DELETE", `/movies/${id}`),
   progress: (id: string) => req<IndexProgress>("GET", `/movies/${id}/index-progress`),
   search: (id: string, body: { type: string; q: string; heat_bins?: number; top_k?: number }) =>
-    req<SearchResult>("POST", `/movies/${id}/search`, body),
+    req<SearchResult>("POST", `/movies/${id}/search`, body).then((r) => ({
+      ...r,
+      candidates: r.candidates.map(withThumbs),
+    })),
   cutClip: (id: string, body: { start: number; end: number; mode: "accurate" | "fast" }) =>
     req<{ clip_id: string; job_id: string }>("POST", `/movies/${id}/clips`, { ...body, format: "mp4" }),
   clip: (id: string) => req<Clip>("GET", `/clips/${id}`),

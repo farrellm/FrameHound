@@ -28,7 +28,7 @@ class Settings:
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", "/data")))
     # Empty REDIS_URL runs jobs in background threads inside the api (dev mode).
     redis_url: str = field(default_factory=lambda: _env("REDIS_URL", ""))
-    index_backend: str = field(default_factory=lambda: _env("INDEX_BACKEND", "local"))
+    index_backend: str = field(default_factory=lambda: _env("INDEX_BACKEND", "colab"))
     max_duration_s: float = field(default_factory=lambda: _float("MAX_DURATION", 4 * 3600))
     max_bytes: int = field(default_factory=lambda: _int("MAX_BYTES", 40 * 1024**3))
     index_timeout_s: int = field(default_factory=lambda: _int("INDEX_TIMEOUT", 3600))
@@ -47,6 +47,21 @@ class Settings:
     ffmpeg_threads: int = field(default_factory=lambda: _int("FFMPEG_THREADS", 0))
     index_zstd_level: int = field(default_factory=lambda: _int("INDEX_ZSTD_LEVEL", 3))
     stale_job_s: int = field(default_factory=lambda: _int("STALE_JOB_S", 300))
+    # Colab (design.md §5, §10).
+    colab_bin: str = field(default_factory=lambda: _env("COLAB_BIN", "colab"))
+    # Empty uses the CLI's own default strategy (oauth2); "adc" for a mounted gcloud ADC.
+    colab_auth: str = field(default_factory=lambda: _env("COLAB_AUTH", ""))
+    colab_gpu: str = field(default_factory=lambda: _env("COLAB_GPU", "L4"))
+    gpu_fallback: tuple[str, ...] = field(default_factory=lambda: tuple(
+        g.strip() for g in _env("GPU_FALLBACK", "L4,T4").split(",") if g.strip()))
+    min_balance_cu: float = field(default_factory=lambda: _float("MIN_BALANCE_CU", 5))
+    monthly_budget_cu: float = field(default_factory=lambda: _float("MONTHLY_BUDGET_CU", 40))
+    max_colab_sessions: int = field(default_factory=lambda: _int("MAX_COLAB_SESSIONS", 1))
+    colab_remote_root: str = field(default_factory=lambda: _env("COLAB_REMOTE_ROOT",
+                                                                "/content/fh"))
+    colab_poll_s: float = field(default_factory=lambda: _float("COLAB_POLL_S", 10))
+    colab_retries: int = field(default_factory=lambda: _int("COLAB_RETRIES", 2))
+    reconcile_s: int = field(default_factory=lambda: _int("RECONCILE_S", 900))
 
     @property
     def db_path(self) -> Path:

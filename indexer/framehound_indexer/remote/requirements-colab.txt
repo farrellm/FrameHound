@@ -1,0 +1,7 @@
+# Installed on the Colab VM with `colab install -r` (the image already has numpy,
+# pyarrow, pillow, httpx, huggingface-hub and tokenizers). onnxruntime-gpu is
+# swapped in by run.py, after faster-whisper pulls in the CPU build.
+faster-whisper>=1.1
+faiss-cpu>=1.8
+zstandard>=0.22
+onnxruntime>=1.20

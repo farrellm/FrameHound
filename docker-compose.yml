@@ -13,6 +13,9 @@ x-backend: &backend
     REDIS_URL: redis://redis:6379/0
   volumes:
     - fh-data:/data
+    # The colab CLI's sign-in and session state (run `colab usage` once on the host
+    # to sign in). Shared with the host so `colab sessions` shows the same names.
+    - ${COLAB_CONFIG_DIR:-~/.config/colab-cli}:/home/fh/.config/colab-cli
   depends_on:
     - redis
   restart: unless-stopped
@@ -27,11 +30,12 @@ services:
 
   worker-io:
     <<: *backend
-    command: ["rq", "worker", "--url", "redis://redis:6379/0", "io"]
+    command: ["framehound-worker", "io"]
 
   worker-index:
     <<: *backend
-    command: ["rq", "worker", "--url", "redis://redis:6379/0", "index"]
+    # Also re-attaches to Colab jobs after a restart and stops orphaned sessions.
+    command: ["framehound-worker", "index"]
 
   web:
     build:

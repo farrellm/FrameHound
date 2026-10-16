@@ -23,11 +23,12 @@ from . import db, jobs, queue, tasks
 from .config import settings
 from .errors import FHError
 from .resolver import Collection, SourceResolver
-from .search import dialogue
+from .search import dialogue, visual
 
 log = logging.getLogger("framehound.api")
 
 _encoder_state = {"state": "loading", "error": None}
+_visual_state = {"state": "loading", "error": None}
 
 
 def _warm_encoders() -> None:
@@ -39,6 +40,21 @@ def _warm_encoders() -> None:
     except Exception as e:  # search degrades to lexical-only dialogue matching
         log.exception("sentence encoder failed to load")
         _encoder_state.update(state="error", error=f"{type(e).__name__}: {e}")
+    try:
+        from framehound_indexer.encoders import visual_encoder
+
+        visual_encoder().text_session()
+        _visual_state["state"] = "ready"
+    except Exception as e:  # Describe it is unavailable until it loads
+        log.exception("visual encoder failed to load")
+        _visual_state.update(state="error", error=f"{type(e).__name__}: {e}")
+
+
+def _colab_forever() -> None:
+    """Inline (no redis) mode with Colab: what worker-index does in compose."""
+    from .worker import colab_housekeeping
+
+    colab_housekeeping()
 
 
 def _gc_clips_forever() -> None:
@@ -66,9 +82,15 @@ async def lifespan(app: FastAPI):
         # Inline mode: jobs ran in this process's threads, so none survived a restart.
         with db.db() as conn:
             conn.execute("UPDATE jobs SET heartbeat_at=0 WHERE state='running'")
+            if settings().index_backend == "colab":
+                # Colab jobs keep running on their VM: re-attach instead of failing them.
+                conn.execute("UPDATE jobs SET heartbeat_at=? WHERE state='running' AND "
+                             "colab_session IS NOT NULL", (db.now(),))
             jobs.reap_stale(conn)
             for j in db.rows(conn, "SELECT id, kind FROM jobs WHERE state='queued'"):
                 queue.enqueue(j["kind"], j["id"])
+        if settings().index_backend == "colab":
+            threading.Thread(target=_colab_forever, daemon=True).start()
     if os.environ.get("FH_SKIP_ENCODERS") != "1":
         threading.Thread(target=_warm_encoders, daemon=True).start()
     threading.Thread(target=_gc_clips_forever, daemon=True).start()
@@ -106,8 +128,18 @@ def _movie_out(conn, m: dict) -> dict:
                          "faces": "faces" in contents},
         "models_ok": (m["models_lock_hash"] == load_lock().hash) if manifest else None,
         "job": _job_out(active) if active else None,
-        "thumbs": [],  # shot thumbnails arrive with the shots stage (M2)
+        "thumbs": _sample_thumbs(conn, m["id"]) if "visual" in contents else [],
     }
+
+
+def _sample_thumbs(conn, movie_id: str, n: int = 5) -> list[str]:
+    """Shot thumbnails spread across the movie, for the library's mini strip."""
+    rows = conn.execute("SELECT idx FROM shots WHERE movie_id=? ORDER BY idx",
+                        (movie_id,)).fetchall()
+    if not rows:
+        return []
+    picks = sorted({round(i * (len(rows) - 1) / max(n - 1, 1)) for i in range(n)})
+    return [visual.thumb_url(movie_id, rows[k][0]) for k in picks]
 
 
 def _job_out(j: dict, stages: list[dict] | None = None) -> dict:
@@ -150,10 +182,32 @@ def health():
         "redis": queue.redis_ok(),
         "disk_free_bytes": du.free if du else None,
         "index_backend": s.index_backend,
-        "colab": {"state": "not_configured"},
+        "colab": _colab_health(),
         "encoders": _encoder_state,
+        "visual_encoder": _visual_state,
         "models_lock_hash": load_lock().hash,
     }
+
+
+_colab_cache: dict = {"at": 0.0, "value": None}
+
+
+def _colab_health() -> dict:
+    """Colab auth and balance, cached for a minute (each call runs the CLI)."""
+    if settings().index_backend != "colab":
+        return {"state": "not_configured"}
+    if time.monotonic() - _colab_cache["at"] < 60 and _colab_cache["value"]:
+        return _colab_cache["value"]
+    from .colab import ColabCli, ColabError
+
+    try:
+        u = ColabCli().usage()
+        value = {"state": "ok", "balance_cu": u.balance, "rate_cu_per_hour": u.rate_per_hour}
+    except ColabError as e:
+        value = {"state": "auth_broken" if e.code == "colab_auth" else "error",
+                 "error": e.message}
+    _colab_cache.update(at=time.monotonic(), value=value)
+    return value
 
 
 # movies -------------------------------------------------------------------------
@@ -247,6 +301,7 @@ def delete_movie(movie_id: str):
                 conn.execute(f"DELETE FROM {table} WHERE movie_id=?", (movie_id,))
             conn.execute("DELETE FROM movies WHERE id=? OR merged_into=?", (movie_id, movie_id))
     dialogue.evict(movie_id)
+    visual.evict(movie_id)
     shutil.rmtree(settings().movie_dir(movie_id), ignore_errors=True)
 
 
@@ -314,7 +369,7 @@ def shots(movie_id: str, from_: float = Query(default=0.0, alias="from"),
         _get_movie(conn, movie_id)
         rs = db.rows(conn, 'SELECT idx, start, "end" FROM shots WHERE movie_id=? AND "end">=? '
                      "AND start<=? ORDER BY idx", movie_id, lo, hi)
-    return [{**r, "thumb_url": f"/media/{movie_id}/thumbs/{r['idx']}.jpg"} for r in rs]
+    return [{**r, "thumb_url": visual.thumb_url(movie_id, r["idx"])} for r in rs]
 
 
 # search ----------------------------------------------------------------------------
@@ -359,34 +414,68 @@ def _search(movie_id: str, body: SearchBody) -> dict:
     q = (body.q or "").strip()
     use_dialogue = body.type == "dialogue" or (
         body.type == "text" and (body.also_dialogue or dialogue.looks_like_quote(q)))
-    if body.type in ("text", "image") and "visual" not in contents and not use_dialogue:
+    if body.type == "image":
+        raise FHError("no_image_search", "Show a picture arrives in a later version. "
+                      "Describe it in words instead.", status=409)
+    if body.type == "text" and "visual" not in contents and not use_dialogue:
         raise FHError("no_visual_index", "This movie was indexed for dialogue only, so "
-                      "Describe it and Show a picture aren't available yet. Quote a line instead.",
+                      "Describe it isn't available. Re-index it, or quote a line instead.",
                       status=409)
     if not q:
         raise FHError("bad_query", "Type something to find.")
-    if "dialogue" not in contents:
+    if body.type == "dialogue" and "dialogue" not in contents:
         raise FHError("no_dialogue_index", "This movie has no dialogue index.", status=409)
 
-    qvec = None
-    if _encoder_state["state"] != "error":
-        try:
-            from framehound_indexer.encoders import encode_sentence
+    top_k = body.top_k or s.top_k
+    bins = body.heat_bins or s.heat_bins
+    duration = m["duration_s"] or 0.0
+    index_dir = s.movie_dir(movie_id) / "index"
+    results = []
+    semantic = None
+    if body.type == "text" and "visual" in contents:
+        if _visual_state["state"] == "error":
+            raise FHError("encoder_unavailable", "Describe it is unavailable: the visual "
+                          "model didn't load on the server.", detail=_visual_state["error"],
+                          status=503)
+        from framehound_indexer.encoders import encode_text
 
-            qvec = encode_sentence([q])[0]
-        except Exception:
-            log.exception("query encoding failed; lexical only")
-    idx = dialogue.dialogue_index(movie_id, s.movie_dir(movie_id) / "index")
-    result = idx.search(q, qvec, m["duration_s"] or 0.0, body.top_k or s.top_k,
-                        body.heat_bins or s.heat_bins, s.z_min)
+        vidx = visual.visual_index(movie_id, index_dir)
+        results.append(vidx.search(encode_text(q), duration, top_k, bins, s.z_min))
+    if use_dialogue and "dialogue" in contents:
+        qvec = None
+        if _encoder_state["state"] != "error":
+            try:
+                from framehound_indexer.encoders import encode_sentence
+
+                qvec = encode_sentence([q])[0]
+            except Exception:
+                log.exception("query encoding failed; lexical only")
+        semantic = qvec is not None
+        idx = dialogue.dialogue_index(movie_id, index_dir)
+        results.append(idx.search(q, qvec, duration, top_k, bins, s.z_min))
+    result = _merge(results, top_k) if len(results) > 1 else results[0]
     latency = (time.perf_counter() - t0) * 1000
     with db.db() as conn:
         conn.execute("INSERT INTO queries(id, movie_id, type, q, created_at, latency_ms) "
                      "VALUES (?,?,?,?,?,?)",
                      (db.new_id(), movie_id, body.type, q, db.now(), latency))
     result["latency_ms"] = round(latency, 1)
-    result["semantic"] = qvec is not None
+    result["semantic"] = semantic
     return result
+
+
+def _merge(results: list[dict], top_k: int) -> dict:
+    """Visual + dialogue: each list's scores scaled by its own best, interleaved by
+    that, overlaps resolved by NMS; heat is the pointwise max (both are z)."""
+    from .search.heat import nms
+
+    cands = []
+    for r in results:
+        best = max((c["score"] for c in r["candidates"]), default=1.0) or 1.0
+        cands += [{**c, "score": round(c["score"] / best, 4)} for c in r["candidates"]]
+    heat = [max(vals) for vals in zip(*(r["heat"] for r in results), strict=True)]
+    return {"candidates": nms(cands)[:top_k], "heat": heat,
+            "heat_threshold": min(r["heat_threshold"] for r in results)}
 
 
 # clips -----------------------------------------------------------------------------
@@ -476,6 +565,17 @@ def proxy(movie_id: str):
     if not path.exists():
         raise FHError("not_ready", "This movie isn't ready to play yet.", status=404)
     return FileResponse(path, media_type="video/mp4")
+
+
+@app.get("/media/{movie_id}/thumbs/{idx}.jpg")
+def thumb(movie_id: str, idx: int):
+    if not re.fullmatch(r"[a-z0-9]{1,32}", movie_id) or idx < 0:
+        raise _not_found()
+    path = settings().movie_dir(movie_id) / "index" / bundle.THUMBS / f"{idx}.jpg"
+    if not path.exists():
+        raise FHError("not_found", "No such thumbnail.", status=404)
+    return FileResponse(path, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 # jobs --------------------------------------------------------------------------------

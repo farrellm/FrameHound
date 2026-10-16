@@ -19,6 +19,10 @@ def _bad(detail: str) -> FHError:
     return FHError("bad_index", "The index came back damaged. Retry indexing.", detail=detail)
 
 
+def _ntotal(path: Path) -> int:
+    return faiss.read_index(str(path), faiss.IO_FLAG_MMAP).ntotal
+
+
 def import_bundle(movie_id: str, bundle_path: Path) -> dict:
     mdir = settings().movie_dir(movie_id)
     staging = mdir / "index.new"
@@ -35,18 +39,35 @@ def import_bundle(movie_id: str, bundle_path: Path) -> dict:
                       "the server uses. Re-index it to search.",
                       detail=f"bundle {manifest.get('models_lock_hash')} != {load_lock().hash}")
     counts = manifest.get("counts", {})
-    transcript = pq.read_table(staging / bundle.TRANSCRIPT).to_pylist()
-    n_sent = pq.read_metadata(staging / bundle.SENTENCES_TABLE).num_rows
-    n_index = faiss.read_index(str(staging / bundle.SENTENCES_INDEX), faiss.IO_FLAG_MMAP).ntotal
-    if (len(transcript), n_sent, n_index) != (counts.get("transcript_segments"),
-                                              counts.get("sentences"), counts.get("sentences_index")):
-        raise _bad(f"row counts {len(transcript)}/{n_sent}/{n_index} don't match manifest {counts}")
-    if n_sent != n_index:
-        raise _bad(f"sentences table {n_sent} != index {n_index}")
+    contents = set(manifest.get("contents", []))
+    transcript: list[dict] = []
+    if "dialogue" in contents:
+        transcript = pq.read_table(staging / bundle.TRANSCRIPT).to_pylist()
+        n_sent = pq.read_metadata(staging / bundle.SENTENCES_TABLE).num_rows
+        n_index = _ntotal(staging / bundle.SENTENCES_INDEX)
+        if (len(transcript), n_sent, n_index) != (counts.get("transcript_segments"),
+                                                  counts.get("sentences"),
+                                                  counts.get("sentences_index")):
+            raise _bad(f"row counts {len(transcript)}/{n_sent}/{n_index} don't match "
+                       f"manifest {counts}")
+        if n_sent != n_index:
+            raise _bad(f"sentences table {n_sent} != index {n_index}")
+    shots: list[dict] = []
+    frames: list[dict] = []
+    if "visual" in contents:
+        shots = pq.read_table(staging / bundle.SHOTS).to_pylist()
+        frames = pq.read_table(staging / bundle.FRAMES).to_pylist()
+        n_clip = _ntotal(staging / bundle.CLIP_INDEX)
+        if (len(shots), len(frames), n_clip) != (counts.get("shots"), counts.get("frames"),
+                                                 counts.get("clip_index")):
+            raise _bad(f"row counts {len(shots)}/{len(frames)}/{n_clip} don't match "
+                       f"manifest {counts}")
+        if len(frames) != n_clip:
+            raise _bad(f"frames table {len(frames)} != index {n_clip}")
 
     with db.db() as conn, db.tx(conn):
-        conn.execute("DELETE FROM transcript_segments WHERE movie_id=?", (movie_id,))
-        conn.execute("DELETE FROM transcript_fts WHERE movie_id=?", (movie_id,))
+        for table in ("transcript_segments", "transcript_fts", "shots", "frames"):
+            conn.execute(f"DELETE FROM {table} WHERE movie_id=?", (movie_id,))
         conn.executemany(
             'INSERT INTO transcript_segments(movie_id, seg, start, "end", text, words_json) '
             "VALUES (?,?,?,?,?,?)",
@@ -55,6 +76,10 @@ def import_bundle(movie_id: str, bundle_path: Path) -> dict:
         )
         conn.executemany("INSERT INTO transcript_fts(text, movie_id, seg) VALUES (?,?,?)",
                          [(r["text"], movie_id, r["seg"]) for r in transcript])
+        conn.executemany('INSERT INTO shots(movie_id, idx, start, "end") VALUES (?,?,?,?)',
+                         [(movie_id, r["idx"], r["start"], r["end"]) for r in shots])
+        conn.executemany("INSERT INTO frames(movie_id, row, t, shot_idx) VALUES (?,?,?,?)",
+                         [(movie_id, r["row"], r["t"], r["shot_idx"]) for r in frames])
         conn.execute("UPDATE movies SET models_lock_hash=? WHERE id=?",
                      (manifest["models_lock_hash"], movie_id))
         live, old = mdir / "index", mdir / "index.old"

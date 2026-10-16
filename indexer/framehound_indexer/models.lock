@@ -14,5 +14,37 @@
     "max_length": 256,
     "pooling": "cls",
     "dim": 384
+  },
+  "visual": {
+    "repo": "onnx-community/siglip2-so400m-patch14-384-ONNX",
+    "revision": "8ecf3f2bbb135bec33f4bb721c11479bf6a8a254",
+    "text_file": "onnx/text_model.onnx",
+    "vision_file": "onnx/vision_model_fp16.onnx",
+    "image_size": 384,
+    "resample": "bilinear",
+    "mean": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "std": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "text_max_length": 64,
+    "pad_token": "<pad>",
+    "lowercase": true,
+    "dim": 1152,
+    "fps": 2,
+    "batch_size": 64
+  },
+  "shots": {
+    "detector": "adaptive-content",
+    "width": 96,
+    "ratio": 3.0,
+    "min_content": 15.0,
+    "window": 2,
+    "min_shot_s": 0.6
   }
 }

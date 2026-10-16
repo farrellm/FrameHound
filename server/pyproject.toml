@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 framehound-api = "framehound.api:main"
+framehound-worker = "framehound.worker:main"
 
 [tool.uv.sources]
 framehound-indexer = { workspace = true }

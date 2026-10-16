@@ -1,6 +1,6 @@
 // Search and timeline (ui-design.md §4.3).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, api, proxyUrl, type Candidate, type Movie, type SearchResult } from "../api";
+import { ApiError, api, proxyUrl, type Candidate, type Movie, type SearchResult, type Shot } from "../api";
 import { useAnnouncer } from "../components/Announcer";
 import { Sheet } from "../components/Sheet";
 import { MiniStrip } from "../components/MiniStrip";
@@ -31,19 +31,27 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
   const fps = movie.fps || 24;
   const frame = 1 / fps;
   const initial = useMemo(() => new URLSearchParams(location.search), []);
-  const available = (m: Mode) => (m === "quote" ? movie.capabilities.dialogue : movie.capabilities.visual);
+  // Show a picture needs image search, which arrives with faces (M3).
+  const available = (m: Mode) =>
+    m === "quote" ? movie.capabilities.dialogue : m === "describe" ? movie.capabilities.visual : false;
 
   const video = useRef<HTMLVideoElement>(null);
   const [t, setT] = useState(0);
   const [mode, setMode] = useState<Mode>(() => {
     const m = initial.get("mode") as Mode | null;
-    return m && MODES.some((x) => x.id === m) && available(m) ? m : "quote";
+    if (m && MODES.some((x) => x.id === m) && available(m)) return m;
+    return movie.capabilities.visual ? "describe" : "quote";
   });
+  const [shots, setShots] = useState<Shot[]>([]);
+  useEffect(() => {
+    if (!movie.capabilities.visual) return;
+    api.shots(movie.id).then(setShots, () => {});
+  }, [movie.id, movie.capabilities.visual]);
   const [q, setQ] = useState(initial.get("q") ?? "");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
-  const [modeNote, setModeNote] = useState(false);
+  const [modeNote, setModeNote] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const num = (k: string) => {
     const v = initial.get(k);
@@ -297,8 +305,13 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             aria-disabled={!available(m.id)}
             aria-label={m.label}
             onClick={() => {
-              if (!available(m.id)) return setModeNote(true);
-              setModeNote(false);
+              if (!available(m.id))
+                return setModeNote(
+                  m.id === "picture"
+                    ? "Searching by picture isn't available yet. Describe it in words instead."
+                    : "This movie was indexed for dialogue only. Re-index it to describe what's on screen.",
+                );
+              setModeNote(null);
               setMode(m.id);
             }}
           >
@@ -306,7 +319,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
           </button>
         ))}
       </div>
-      {modeNote && <p className="note">This movie can only be searched by its dialogue for now.</p>}
+      {modeNote && <p className="note">{modeNote}</p>}
       <div className="query-row">
         <label htmlFor="q" className="visually-hidden">
           {MODES.find((m) => m.id === mode)!.label}
@@ -384,7 +397,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             dim={searching}
             inPt={inPt}
             outPt={outPt}
-            thumbs={movie.thumbs}
+            shots={shots}
             zoomed={zoomed}
             onSeek={seek}
             onIn={dragIn}

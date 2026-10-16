@@ -86,10 +86,10 @@ The screens, visual language, and iPhone behavior are specified in [ui-design.md
 
 ### Shared indexer package
 
-`framehound_indexer/` is a standalone Python package that is built as a wheel. It contains:
+`framehound_indexer/` is a standalone Python package. The host ships it to a Colab VM as a reproducible tarball (fixed mtimes and modes, named by its hash) that is unpacked onto `PYTHONPATH`, so the image needs no build step and a re-upload is skipped when nothing changed. It contains:
 
 - the indexing pipeline (the entry point is `python -m framehound_indexer job.json`), and
-- the **query encoders**: `encode_text`, `encode_image`, `encode_face`, and `encode_sentence`. The `api` imports these.
+- the **query encoders**: `encode_text`, `encode_image`, `encode_face`, and `encode_sentence`. The `api` imports these. Every model runs on ONNX Runtime (CUDA on the VM, CPU on the host), so the `api` needs no torch, and both sides run the same exported weights.
 
 All models are pinned in one `models.lock` file (model id, revision or commit hash, and preprocessing parameters). A query embedding is only comparable to the index embeddings if both come from the *exact* same model and preprocessing. Each index bundle therefore records the hash of its `models.lock`, and `api` refuses to search a bundle whose hash doesn't match its own.
 
@@ -154,34 +154,38 @@ Indexing works on the proxy or on the source, whichever the VM has. Detection qu
 
 ### Orchestration: `ColabIndexBackend`
 
-The backend is a Python class that shells out to the `colab` CLI (v0.7.x) using `--auth=adc`. Every command passes an explicit `-s fh-{movie_id}-{attempt}`. Omitting `-s` would auto-generate a random name and make later commands ambiguous.
+The backend is a Python class that shells out to the `colab` CLI (v0.7.x; `--auth` from `COLAB_AUTH`, default the CLI's own oauth2, or `adc`). All calls go through one adapter (`server/framehound/colab.py`). Every command passes an explicit `-s fh-{movie_id}-{attempt}`. Omitting `-s` would auto-generate a random name and make later commands ambiguous.
 
 ```
  1. colab usage                                  # check compute-unit balance vs. budget
  2. colab new -s S --gpu $GPU                    # GPU from config, default L4
       └─ on HTTP 400 (no entitlement/quota): fall back along GPU_FALLBACK = [L4, T4]
- 3. colab install -s S -r requirements-index.txt
- 4. colab upload -s S framehound_indexer-*.whl /content/fh/
+ 3. colab exec -f util.py (mkdir)                # the contents API won't create directories
+    colab upload framehound_indexer-{hash}.tar; colab exec -f util.py (unpack)
+    colab install -s S -r requirements-colab.txt
     colab upload -s S job.json /content/fh/{id}/job.json
-    colab install -s S /content/fh/framehound_indexer-*.whl
-    [colab upload -s S proxy.mp4 /content/fh/{id}/media.mp4]   # only for non-public sources
- 5. colab exec -s S -f launch.py --env JOB=/content/fh/{id}/job.json
-      # launch.py: subprocess.Popen([... "-m", "framehound_indexer", JOB],
-      #            start_new_session=True, stdout/stderr → run.log); prints PID; returns
- 6. loop every 10 s:
-      colab exec -s S --timeout 20 -f poll.py    # prints new lines of progress.jsonl + PID liveness
+    [colab upload proxy.mp4 in 64 MB parts; util.py joins]   # only for non-public sources
+ 4. colab exec -s S -f launch.py --env FH_JOB=… --env FH_PKG=…
+      # launch.py: Popen(run.py JOB, start_new_session=True, → run.log); prints PID; returns.
+      # run.py swaps in onnxruntime-gpu if needed, puts the image's CUDA 12 pip libraries
+      # on LD_LIBRARY_PATH, then execs python -m framehound_indexer JOB
+ 5. loop every 10 s:
+      colab exec -s S -f poll.py --env FH_OFFSET=n   # new progress.jsonl lines + PID liveness
       → each line becomes a job progress event → SSE to the browser
- 7. on {"stage":"done"}:
-      colab download -s S /content/fh/{id}/index.tar.zst /data/movies/{id}/index.tar.zst
- 8. finally: colab log -s S -o /data/logs/{job}.jsonl   (on failure only)
+ 6. on {"stage":"done"}:
+      colab exec -f util.py (split) + colab download of each 64 MB part → index.tar.zst
+ 7. finally: colab log -s S -o /data/logs/{session}.jsonl   (on failure only)
              colab stop -s S
 ```
+
+`colab upload`/`download` send a whole file as one base64 JSON request, so anything over 64 MB moves in parts. Exit codes are unreliable (`exec` exits 0 when the code raises), so results are judged from marker lines our scripts print (`@@fh-launched`, `@@fh-poll`, `@@fh-util`) and from the CLI's own messages.
 
 The reasons behind the main choices:
 
 - **Detached process with polling, not one long `colab exec`.** `colab exec` has a default timeout of 30 s and holds a websocket open. A 15-minute exec would be fragile if the network blipped or the worker restarted. With a detached process, the indexer keeps running on the VM even if the host worker dies. On restart, the worker sees the job's `colab_session` in SQLite and **re-attaches by polling** instead of starting over.
 - **Not `colab run`.** It combines new, exec, and stop, but it cannot stage inputs, it gives no incremental progress, and it cannot be re-attached. It is still useful for the manual smoke test (§11).
 - **GPU name validation.** An unrecognized `--gpu` value silently falls back to A100, so the backend validates the configured GPU against the supported set before calling `colab new`.
+- **CUDA on the image.** As of 2026-10 the Colab image's system CUDA is 13 (torch cu130), while ctranslate2 and onnxruntime-gpu link CUDA 12. The image also carries CUDA 12 cuBLAS/cuDNN as pip wheels; `run.py` puts their `nvidia/*/lib` directories on `LD_LIBRARY_PATH` before the pipeline starts. Without that, Whisper silently falls back to the CPU.
 
 ### Pipeline on the VM (`framehound_indexer`)
 
@@ -190,16 +194,16 @@ Each stage writes its output and a `.done` marker under `/content/fh/{id}/work/`
 | # | Stage | Implementation | Output |
 |---|---|---|---|
 | 0 | fetch | httpx download (public sources), SHA-256 verify | `media.*` |
-| 1 | shots | PySceneDetect `AdaptiveDetector` (on GPU-decoded downscaled frames) | `shots.parquet (idx, start, end)` |
-| 2 | frames | PyAV decode at **2 fps** + each shot's middle frame; resize to model input | in-memory batches |
-| 3 | visual | **SigLIP-so400m** (fallback OpenCLIP ViT-L/14), fp16, batch 256; L2-normalize | `clip.faiss` (IndexFlatIP), `frames.parquet (row, t, shot_idx)` |
+| 1 | shots | numpy port of PySceneDetect's `AdaptiveDetector` (HSV content change vs. its neighbours, ratio ≥ 3) over every frame decoded at 96 px by ffmpeg (NVDEC when available) | `shots.parquet (idx, start, end)` |
+| 2–3 | visual | one ffmpeg decode at **2 fps** (frames, visual and thumbs fused): squash to 384², **SigLIP 2 so400m** vision tower (ONNX fp16, CUDA), L2-normalize; each shot's thumbnail is the sampled frame nearest its middle | `clip.faiss` (IndexFlatIP), `frames.parquet (row, t, shot_idx)`, `thumbs/` |
 | 4 | faces | **InsightFace** `buffalo_l`: RetinaFace detect (det ≥ 0.6, min face 40 px) + ArcFace 512-d | `faces.faiss`, `faces.parquet (row, frame_row, bbox, det_score)` |
 | 5 | audio | ffmpeg → 16 kHz mono; **faster-whisper large-v3**, `word_timestamps=True`, VAD filter | `transcript.parquet (seg, start, end, text, words_json)` |
 | 6 | sentences | **bge-small-en-v1.5** over transcript segments (plus 3-segment sliding windows) | `sentences.faiss` |
-| 7 | thumbs | one 320 px JPEG per shot | `thumbs/` |
 | 8 | bundle | write `manifest.json`, `tar` + `zstd -19` | `index.tar.zst` |
 
-Stages 3–4 share the decoded frames from stage 2, so each frame is decoded only once. Stage 5 runs concurrently with stages 2–4 because Whisper and the vision models fit on the GPU together (on an L4, 24 GB).
+The visual stage decodes each sampled frame once for the embeddings and the thumbnails. The audio lane (audio, sentences) runs in a thread alongside the visual lane (shots, visual, and faces in M3), because Whisper and the vision models fit on the GPU together.
+
+**Visual model.** SigLIP v1 so400m has no ONNX export, so the lock pins `onnx-community/siglip2-so400m-patch14-384-ONNX` (SigLIP 2, same size, better retrieval): the VM runs `vision_model_fp16.onnx`, the host `text_model.onnx` (about 2.2 GB of RAM; a query takes about 0.6 s with the 3-prompt ensemble). Text is lowercased and padded to 64 tokens, as SigLIP was trained. `models.tiny.lock` uses SigLIP base (224 px) for development.
 
 **Size and time estimates for a 2-hour film.** 2 fps gives about 14.4k frames.
 
@@ -246,7 +250,7 @@ The query encoders load at startup: SigLIP text and image towers, ArcFace, and b
 ### Query types
 
 **Text** (`type=text`):
-1. Prompt ensemble. Embed `"{q}"`, `"a photo of {q}"`, and `"a film still of {q}"`, then average and normalize.
+1. Prompt ensemble (SigLIP 2 text tower). Embed `"{q}"`, `"a photo of {q}"`, and `"a film still of {q}"`, then average and normalize.
 2. Score every frame by cosine similarity to the averaged embedding.
 3. If the text reads like a quote (it has quotation marks, or the user toggled "also search dialogue"), also run the dialogue path and merge the results.
 
@@ -349,7 +353,7 @@ clips(id PK, movie_id, start REAL, end REAL, mode, format, path, created_at)
 
 ```
 ingest:  queued → downloading → probing → transcoding_proxy → (dedup hit ? ready : enqueue index)
-index:   queued → provisioning_gpu → staging_media → indexing:{fetch|shots|frames|visual|faces|audio|sentences|thumbs|bundle}
+index:   queued → provisioning_gpu → staging_media → indexing:{fetch|shots|visual|faces|audio|sentences|bundle}
                 → downloading_index → importing → ready
          any → failed (error recorded) | cancelled
 clip:    queued → cutting → ready | failed
@@ -378,13 +382,14 @@ clip:    queued → cutting → ready | failed
   - `SourceResolver` with recorded archive.org metadata JSON (item, collection, item with no video) and a mocked advancedsearch,
   - SSRF guard (private IPs, redirect to a private IP, DNS rebinding),
   - SRT time-shifting.
-- **`ColabIndexBackend` tests:** a **fake `colab` executable** is put on `PATH`. It records argv and simulates these scenarios:
+- **`ColabIndexBackend` tests:** a **fake `colab` executable** (`server/tests/fake_colab.py`) is put on `PATH`. Each session is a directory standing in for the VM, so the real launch/poll/util scripts run and start the fake indexer. It records argv and simulates these scenarios:
   - success,
   - `new` returning 400 (should trigger the GPU fallback),
   - a stalled progress file (should trip the watchdog),
   - a session vanishing mid-run (should retry),
   - an orphaned `fh-*` session (the reconciler should stop it),
-  - a worker restart mid-job (should re-attach).
+  - a worker restart mid-job (should re-attach),
+  - budget refusal, no GPU at all, broken auth, and a chunked proxy upload.
 - **Integration tests:** `LocalIndexBackend` with tiny models runs on a 2-minute public-domain clip with known ground truth: one text target, one face (a reference still), and one quote. Each query's correct segment must rank in the top 3. The clip output is checked with `ffprobe`: duration within ±1 frame in accurate mode.
 - **Manual smoke test** (not in CI because it costs compute units): `colab run --gpu T4 scripts/colab_smoke.py` installs the indexer wheel and indexes the same 2-minute clip. Its bundle must match the local bundle's manifest, with embeddings within cosine 0.999.
 
@@ -393,7 +398,7 @@ clip:    queued → cutting → ready | failed
 | Milestone | Scope |
 |---|---|
 | **M1 — Skeleton** (done) | Compose stack, HTTP + archive.org ingest (incl. collection picker), proxy, `LocalIndexBackend` with transcript only, dialogue search, accurate MP4 clip. |
-| **M2 — Colab + visual** | `ColabIndexBackend` (provision → detached run → poll → fetch → stop, reconciler, budget), shots + SigLIP, text search, timeline/heat-map UI. |
+| **M2 — Colab + visual** (done) | `ColabIndexBackend` (provision → detached run → poll → fetch → stop, reconciler, budget), shots + SigLIP, text search, timeline/heat-map UI. |
 | **M3 — Faces & images** | InsightFace stage, image/face search and fusion, face crop export. |
 | **M4 — Torrents & polish** | libtorrent ingest + proxy upload path, GIF and subtitle export, optional VLM reranker, eviction, token auth. |
 

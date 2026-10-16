@@ -40,6 +40,14 @@ class ModelsLock:
     def sentence(self) -> dict[str, Any]:
         return self.data["sentence"]
 
+    @property
+    def visual(self) -> dict[str, Any]:
+        return self.data["visual"]
+
+    @property
+    def shots(self) -> dict[str, Any]:
+        return self.data["shots"]
+
 
 def load_lock(path: str | os.PathLike[str] | None = None) -> ModelsLock:
     """Load the lock from ``path``, ``$FH_MODELS_LOCK``, or the packaged default.

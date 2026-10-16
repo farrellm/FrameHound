@@ -23,6 +23,13 @@ function parses(text: string): boolean {
 export function Library() {
   const [movies, setMovies] = useState<Movie[] | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
+  const [colabBroken, setColabBroken] = useState(false);
+  useEffect(() => {
+    api.health().then(
+      (h) => setColabBroken(h.colab.state === "auth_broken"),
+      () => {},
+    );
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -52,6 +59,11 @@ export function Library() {
   return (
     <main className="page">
       <h1 className="screen-title">FrameHound</h1>
+      {colabBroken && (
+        <p className="message danger" role="alert">
+          Colab sign-in has expired. On the server, sign the colab CLI in again, then retry indexing.
+        </p>
+      )}
       <AddMovie onAdded={load} />
       {loadError && (
         <p className="message danger" role="alert">

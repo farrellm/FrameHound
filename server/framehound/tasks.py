@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
 
 from framehound_indexer import load_lock
 
 from . import db, jobs, queue
+from .colab import SESSION_PREFIX, ColabCli, ColabError
 from .config import settings
 from .download import download, sha256_file
 from .errors import Cancelled, FHError
 from .importer import import_bundle
-from .index_backend import get_backend
+from .index_backend import SessionLost, get_backend
 from .media import cut_clip, ffprobe, transcode_proxy, validate
 from .safe_http import SafeClient
+
+log = logging.getLogger("framehound.tasks")
 
 ACTIVE = ("ingesting", "indexing")
 
@@ -141,66 +145,56 @@ def _dedup(conn, movie_id: str, sha: str) -> str | None:
 # index ----------------------------------------------------------------------
 
 def run_index(job_id: str) -> None:
+    """Index a movie; a job already running with a backend handle is re-attached
+    (the worker restarted while its Colab VM kept indexing)."""
     db.init()
     s = settings()
     job = jobs.Job(job_id)
     conn = job.conn
     mid = job.movie_id
-    backend = get_backend()
-    handle: dict | None = None
+    row = job.row()
+    resume = row.get("state") == "running" and bool(row.get("backend_handle"))
+    handle: dict | None = json.loads(row["backend_handle"]) if resume else None
+    backend = get_backend(handle.get("backend", "local") if handle else None)
     failed = True
     try:
-        if not job.start():
+        if resume:
+            if not job.resume():
+                return
+        elif not job.start():
             return
-        job.set(gpu=backend.gpu or "local")
+        else:
+            job.set(gpu=backend.gpu or "local")
         m = _movie(conn, mid)
         mdir = s.movie_dir(mid)
         src = mdir / (m["source_file"] or "")
         if not src.exists():
             raise FHError("source_missing", "The movie file is gone. Re-download it to index.")
-
-        job.stage("staging_media", 0.0, force=True)
         spec = {"movie_id": mid, "media": {"path": str(src)}, "duration_s": m["duration_s"],
-                "models_lock": load_lock().data}
-        handle = backend.start(job_id, spec)
-        job.set(backend_handle=json.dumps(handle))
-        job.stage_done("staging_media")
-
-        timeout = s.local_index_timeout_s if backend.name == "local" else s.index_timeout_s
-        deadline = time.monotonic() + timeout
-        last_progress = time.monotonic()
-        finished = False
-        while not finished:
-            events, alive = backend.poll(handle)
-            for ev in events:
-                last_progress = time.monotonic()
-                if ev["stage"] == "done":
-                    finished = True
-                elif ev["stage"] == "error":
-                    raise FHError("index_failed", "Indexing failed.",
-                                  detail=f"{ev.get('message')}\n{backend.log_tail(handle)}")
-                else:
-                    job.stage(ev["stage"], ev.get("pct", 0.0), ev.get("eta_s"),
-                              state="done" if ev.get("state") == "done" else "running",
-                              force=ev.get("state") == "done")
-            if finished:
+                "models_lock": load_lock().data,
+                "source": {"kind": m["source_kind"], "url": m["source_url"],
+                           "sha256": m["sha256"], "proxy": str(mdir / "proxy.mp4")}}
+        attempt = int(row.get("attempt") or 0)
+        if handle is None:
+            handle = backend.start(job, spec, attempt)
+            job.set(backend_handle=json.dumps(handle))
+        retries = s.colab_retries
+        while True:
+            try:
+                _wait_for_index(job, backend, handle)
                 break
-            if not alive:
-                # The process may have written its last lines just before exiting.
-                events, _ = backend.poll(handle)
-                if any(ev["stage"] == "done" for ev in events):
-                    break
-                raise FHError("index_failed", "Indexing stopped unexpectedly.",
-                              detail=backend.log_tail(handle))
-            now = time.monotonic()
-            if now > deadline:
-                raise FHError("index_timeout", f"Indexing took longer than "
-                              f"{timeout // 60} minutes and was stopped.")
-            if now - last_progress > s.stage_watchdog_s:
-                raise FHError("index_stalled", "Indexing stopped making progress and was "
-                              "stopped.", detail=backend.log_tail(handle))
-            job.check_cancel()
-            time.sleep(backend.poll_interval_s)
+            except SessionLost as e:
+                if retries <= 0:
+                    raise FHError("colab_lost", "The Colab GPU went away during indexing "
+                                  "too many times. Retry later.", detail=e.detail) from e
+                retries -= 1
+                attempt += 1
+                log.warning("index %s: session lost, retrying on a fresh VM (%d)", job_id,
+                            attempt)
+                backend.cleanup(handle, failed=True)
+                job.set(attempt=attempt, colab_session=None)
+                handle = backend.start(job, spec, attempt)
+                job.set(backend_handle=json.dumps(handle))
 
         job.stage("downloading_index", 0.0, force=True)
         bundle_path = backend.fetch(handle, mdir / "index.tar.zst")
@@ -209,19 +203,139 @@ def run_index(job_id: str) -> None:
         import_bundle(mid, bundle_path)
         job.stage_done("importing")
         _set_movie(conn, mid, status="ready", error=None)
-        job.finish()
         failed = False
     except Cancelled:
+        if handle is not None:
+            backend.cancel(handle)
+        _finish_index(job, backend, handle, failed=False)
+        handle = None
         job.cancelled()
         _set_movie(conn, mid, status="cancelled", error=None)
-        failed = False
+        return
     except Exception as e:  # noqa: BLE001 (recorded on the job)
+        _finish_index(job, backend, handle, failed=True)
+        handle = None
         err = job.fail(e)
         _set_movie(conn, mid, status="failed", error=err.message)
+        return
     finally:
         if handle is not None:
-            backend.cleanup(handle, failed=failed)
+            _finish_index(job, backend, handle, failed=failed)
+        if not failed:
+            job.finish()
         job.close()
+
+
+def _finish_index(job: jobs.Job, backend, handle: dict | None, failed: bool) -> None:
+    """Release the backend (stops the Colab VM) and record what it cost."""
+    if handle is None:
+        return
+    try:
+        backend.cleanup(handle, failed=failed)
+    except Exception:
+        log.exception("index cleanup failed")
+    if handle.get("final_cu") is not None:
+        job.set(compute_units_used=handle["final_cu"])
+
+
+def _wait_for_index(job: jobs.Job, backend, handle: dict) -> None:
+    """Poll the pipeline until it finishes, relaying its progress to the job."""
+    s = settings()
+    timeout = s.local_index_timeout_s if backend.name == "local" else s.index_timeout_s
+    started = handle.get("started") or time.time()
+    deadline = time.monotonic() + max(timeout - (time.time() - started), 60)
+    last_progress = time.monotonic()
+    while True:
+        events, alive = backend.poll(handle)
+        job.set(backend_handle=json.dumps(handle))
+        for ev in events:
+            last_progress = time.monotonic()
+            if ev["stage"] == "done":
+                return
+            if ev["stage"] == "error":
+                raise FHError("index_failed", "Indexing failed.",
+                              detail=f"{ev.get('message')}\n{backend.log_tail(handle)}")
+            job.stage(ev["stage"], ev.get("pct", 0.0), ev.get("eta_s"),
+                      state="done" if ev.get("state") == "done" else "running",
+                      force=ev.get("state") == "done")
+        if not alive:
+            # The process may have written its last lines just before exiting.
+            events, _ = backend.poll(handle)
+            if any(ev["stage"] == "done" for ev in events):
+                return
+            err = next((ev for ev in events if ev["stage"] == "error"), None)
+            raise FHError("index_failed", "Indexing failed." if err else
+                          "Indexing stopped unexpectedly.",
+                          detail=f"{err.get('message') if err else ''}\n"
+                                 f"{backend.log_tail(handle)}".strip())
+        cu = backend.compute_units(handle) if hasattr(backend, "compute_units") else None
+        if cu is not None:
+            job.set(compute_units_used=cu)
+        now = time.monotonic()
+        if now > deadline:
+            raise FHError("index_timeout", f"Indexing took longer than "
+                          f"{timeout // 60} minutes and was stopped.")
+        if now - last_progress > s.stage_watchdog_s:
+            raise FHError("index_stalled", "Indexing stopped making progress and was "
+                          "stopped.", detail=backend.log_tail(handle))
+        job.check_cancel()
+        time.sleep(backend.poll_interval_s)
+
+
+def recover_index_jobs() -> list[str]:
+    """After a restart: re-attach running Colab jobs whose VM is still indexing.
+
+    Returns the job ids re-enqueued. Jobs whose VM is gone are failed now rather
+    than waiting for the stale-job reaper.
+    """
+    db.init()
+    cli = ColabCli()
+    resumed = []
+    with db.db() as conn:
+        running = db.rows(conn, "SELECT id, movie_id, colab_session, backend_handle FROM jobs "
+                          "WHERE kind='index' AND state='running' AND colab_session IS NOT NULL")
+    for j in running:
+        try:
+            alive = cli.status(j["colab_session"])
+        except ColabError as e:
+            log.warning("recover %s: colab status failed: %s", j["id"], e)
+            continue
+        if alive and j["backend_handle"]:
+            with db.db() as conn:
+                conn.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (db.now(), j["id"]))
+            queue.enqueue("index", j["id"])
+            resumed.append(j["id"])
+        else:
+            msg = "The Colab GPU went away while the worker was restarting. Retry to index."
+            with db.db() as conn:
+                conn.execute("UPDATE jobs SET state='failed', error=?, error_code='colab_lost', "
+                             "finished_at=?, seq=seq+1 WHERE id=?", (msg, db.now(), j["id"]))
+                conn.execute("UPDATE movies SET status='failed', error=? WHERE id=? AND "
+                             "status='indexing'", (msg, j["movie_id"]))
+    return resumed
+
+
+def reconcile_sessions(cli: ColabCli | None = None) -> list[str]:
+    """Stop every ``fh-*`` Colab session that no running job owns (leak prevention).
+
+    Sessions the CLI can't name (no local record) are only reported: they can't be
+    addressed by name.
+    """
+    cli = cli or ColabCli()
+    with db.db() as conn:
+        jobs.reap_stale(conn)
+        owned = {r[0] for r in conn.execute(
+            "SELECT colab_session FROM jobs WHERE state='running' AND colab_session IS NOT NULL")}
+    stopped = []
+    for sess in cli.sessions():
+        if sess.name == "?":
+            log.warning("colab session %s has no local record; stop it from the Colab UI",
+                        sess.endpoint)
+        elif sess.name.startswith(SESSION_PREFIX) and sess.name not in owned:
+            log.warning("stopping orphaned colab session %s", sess.name)
+            cli.stop(sess.name)
+            stopped.append(sess.name)
+    return stopped
 
 
 # clip -----------------------------------------------------------------------

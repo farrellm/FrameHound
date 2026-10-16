@@ -686,6 +686,18 @@ legend {
   background-position: center;
 }
 
+/* A shot boundary: a thin splice line across the gate. */
+.gate .cut {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -2px;
+  background: var(--table);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 .heat {
   height: 34px;
   display: block;
@@ -862,6 +874,7 @@ legend {
 }
 
 .match .when {
+  display: block;
   font-size: var(--t-1);
   color: var(--fog);
 }

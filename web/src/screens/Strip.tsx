@@ -2,6 +2,7 @@
 // the gate at their real times, grease-pencil heat under the gate, china-marker
 // in/out brackets, and the playhead.
 import { useLayoutEffect, useRef, useState } from "react";
+import type { Shot } from "../api";
 import { spoken } from "../format";
 
 export interface View {
@@ -20,7 +21,7 @@ interface Props {
   dim: boolean;
   inPt: number | null;
   outPt: number | null;
-  thumbs: string[];
+  shots: Shot[];
   zoomed: boolean;
   onSeek: (t: number, final: boolean) => void;
   onIn: (t: number) => void;
@@ -88,15 +89,21 @@ export function Strip(p: Props) {
     if (wasSingle && e.type === "pointerup") p.onSeek(timeAt(e.clientX), true);
   }
 
-  // Frames in the gate at real positions in time (empty cells until shot thumbnails exist).
+  // Frames in the gate at real positions in time, each showing the shot playing
+  // at its middle (empty cells for a movie without a visual index).
   const step = niceStep((span * (FRAME_W + 3)) / w);
   const frames: { t: number; left: number; width: number; thumb?: string }[] = [];
   for (let k = Math.floor(p.view.from / step); k * step < p.view.to && frames.length < 400; k++) {
     const t0 = k * step;
     const left = x(t0);
     const width = x(Math.min(t0 + step, p.duration)) - left - 3;
-    if (width > 2) frames.push({ t: t0, left, width });
+    if (width > 2) frames.push({ t: t0, left, width, thumb: shotAt(p.shots, t0 + step / 2)?.thumb_url });
   }
+  // Shot boundaries, only once the zoom spreads them far enough apart to read
+  // (in the overview they'd be a picket fence over the frames).
+  const cuts: number[] = [];
+  const visible = p.shots.filter((sh) => sh.start > p.view.from && sh.start < p.view.to);
+  if (visible.length && w / visible.length >= 24) for (const sh of visible) cuts.push(x(sh.start));
 
   return (
     <div className="table">
@@ -128,7 +135,18 @@ export function Strip(p: Props) {
           <div className="sprockets" />
           <div className="gate">
             {frames.map((f) => (
-              <div key={f.t} className="frame" style={{ left: f.left, width: f.width }} />
+              <div
+                key={f.t}
+                className="frame"
+                style={{
+                  left: f.left,
+                  width: f.width,
+                  backgroundImage: f.thumb ? `url(${f.thumb})` : undefined,
+                }}
+              />
+            ))}
+            {cuts.map((cx) => (
+              <div key={cx} className="cut" style={{ left: cx }} />
             ))}
           </div>
           <Heat key={p.sweepKey} {...p} w={w} x={x} />
@@ -247,6 +265,18 @@ function Bracket(p: {
       <span className="mark" />
     </button>
   );
+}
+
+function shotAt(shots: Shot[], t: number): Shot | undefined {
+  let lo = 0;
+  let hi = shots.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (shots[mid].end <= t) lo = mid + 1;
+    else if (shots[mid].start > t) hi = mid - 1;
+    else return shots[mid];
+  }
+  return undefined;
 }
 
 function niceStep(s: number): number {
