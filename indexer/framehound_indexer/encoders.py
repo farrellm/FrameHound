@@ -3,7 +3,8 @@
 Everything runs on ONNX Runtime, so the api needs no torch: ``encode_sentence``
 (bge-small), ``encode_text`` / ``encode_image`` (SigLIP 2) and ``encode_face``
 (InsightFace, in ``faces.py``). The indexing pipeline uses the same classes, on
-CUDA when the VM has it.
+CUDA when the VM has it; there the SigLIP vision tower runs in PyTorch when
+``TORCH_TWINS`` has its checkpoint.
 """
 
 from __future__ import annotations
@@ -153,6 +154,15 @@ def preload_cuda() -> None:
 
 _RESAMPLE = {"bilinear": 2, "bicubic": 3, "lanczos": 1, "nearest": 0}
 
+# The checkpoints the locked ONNX vision towers were exported from. On CUDA the
+# indexer runs these in PyTorch with fused (SDPA) attention, about 1.8x the ONNX
+# export's throughput on an L4, with embeddings matching it to cosine 0.99999.
+# They are pinned here rather than in models.lock, whose hash every bundle carries.
+TORCH_TWINS = {
+    ("onnx-community/siglip2-so400m-patch14-384-ONNX", "8ecf3f2bbb135bec33f4bb721c11479bf6a8a254"):
+        ("google/siglip2-so400m-patch14-384", "e8e487298228002f3d8a82e0cd5c8ea9c567f57f"),
+}
+
 
 class VisualEncoder:
     """SigLIP (2): text and vision towers, each loaded on first use.
@@ -171,6 +181,7 @@ class VisualEncoder:
         self.size = int(self.cfg["image_size"])
         self._text = None
         self._vision = None
+        self._torch = None  # the PyTorch vision tower, or False once ruled out
         self._tokenizer = None
         self._lock = threading.Lock()
         self.mean = np.array(self.cfg["mean"], dtype=np.float32).reshape(1, 3, 1, 1)
@@ -198,6 +209,40 @@ class VisualEncoder:
             if self._vision is None:
                 self._vision = self._session(self.cfg["vision_file"])
             return self._vision
+
+    def torch_vision(self):
+        """The vision tower's PyTorch twin on CUDA, or None (no twin, no CUDA torch,
+        or it failed to load; the ONNX session is used instead)."""
+        with self._lock:
+            if self._torch is None:
+                self._torch = self._load_torch() or False
+            return self._torch or None
+
+    def _load_torch(self):
+        twin = TORCH_TWINS.get((self.cfg["repo"], self.cfg["revision"]))
+        if self.device != "cuda" or twin is None:
+            return None
+        try:
+            import torch
+            from transformers import AutoModel
+
+            if not torch.cuda.is_available():
+                return None
+            model = AutoModel.from_pretrained(twin[0], revision=twin[1], cache_dir=models_dir(),
+                                              dtype=torch.float16, attn_implementation="sdpa")
+            return model.vision_model.to("cuda").eval()
+        except Exception as e:  # noqa: BLE001 (ONNX still works)
+            import sys
+
+            print(f"visual: PyTorch twin unavailable ({type(e).__name__}: {e}); using ONNX",
+                  file=sys.stderr, flush=True)
+            return None
+
+    def vision_backend(self) -> str:
+        """Load the vision tower and say what runs it."""
+        if self.torch_vision() is not None:
+            return f"torch fp16 sdpa ({TORCH_TWINS[(self.cfg['repo'], self.cfg['revision'])][0]})"
+        return f"onnxruntime {self.vision_session().get_providers()}"
 
     def text_session(self):
         with self._lock:
@@ -233,6 +278,13 @@ class VisualEncoder:
         return (px - self.mean) / self.std
 
     def encode_pixels(self, pixels: np.ndarray) -> np.ndarray:
+        model = self.torch_vision()
+        if model is not None:
+            import torch
+
+            x = torch.from_numpy(pixels).to("cuda", torch.float16)
+            with torch.inference_mode():
+                return _normalize(model(pixel_values=x).pooler_output.float().cpu().numpy())
         sess = self.vision_session()
         inp = sess.get_inputs()[0]
         dtype = np.float16 if "float16" in inp.type else np.float32

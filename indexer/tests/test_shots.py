@@ -72,12 +72,8 @@ def test_visual_stage_with_stub_encoder(tmp_path, monkeypatch):
         def __init__(self, *a, **k):
             pass
 
-        def vision_session(self):
-            class S:
-                def get_providers(self):
-                    return ["Stub"]
-
-            return S()
+        def vision_backend(self):
+            return "stub"
 
         def preprocess(self, images):
             return np.stack([np.asarray(im, np.float32).mean(axis=(0, 1)) for im in images])

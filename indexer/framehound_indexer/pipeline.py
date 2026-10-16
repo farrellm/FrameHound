@@ -334,8 +334,7 @@ def stage_visual(ctx: Ctx) -> None:
 
     device = ctx.ort_device()
     enc = VisualEncoder(ctx.lock, device=device)
-    print(f"visual: onnxruntime providers {enc.vision_session().get_providers()}",
-          file=sys.stderr, flush=True)
+    print(f"visual: {enc.vision_backend()}", file=sys.stderr, flush=True)
     batch = int(cfg.get("batch_size", 32)) if device == "cuda" else 16
     index = faiss.IndexFlatIP(enc.dim)
     q: queue.Queue = queue.Queue(maxsize=4)
