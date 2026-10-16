@@ -1189,3 +1189,71 @@ kbd {
   white-space: nowrap;
   font-size: var(--t-1);
 }
+
+/* find a movie (Bitmagnet) ------------------------------------------------- */
+
+.film-group {
+  margin-top: 20px;
+}
+
+.film-group h3 {
+  font-size: var(--t0);
+  font-weight: 700;
+  margin: 0;
+}
+
+.film-meta {
+  display: flex;
+  column-gap: 12px;
+  color: var(--fog);
+  font-size: var(--t-1);
+  margin: 0;
+}
+
+.film-group .choices {
+  margin: 4px 0 0;
+}
+
+/* Grid items default to min-width: auto; long release names must truncate. */
+.finds .choices > li,
+.release {
+  min-width: 0;
+}
+
+.release-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.release-facts {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 12px;
+}
+
+.release-facts .quality {
+  font-weight: 700;
+}
+
+.release-name {
+  display: block;
+  color: var(--fog);
+  font-size: var(--t-1);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.radio.disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* The action stays in thumb reach while the list scrolls under it. */
+.sheet-actions.sticky {
+  position: sticky;
+  bottom: calc(-1 * (env(safe-area-inset-bottom) + 16px));
+  background: var(--diffuser);
+  padding: 12px 0 calc(env(safe-area-inset-bottom) + 16px);
+  margin-bottom: calc(-1 * (env(safe-area-inset-bottom) + 16px));
+}

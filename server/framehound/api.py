@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from framehound_indexer import bundle, load_lock
 from pydantic import BaseModel, Field
 
-from . import db, evict, jobs, queue, tasks
+from . import bitmagnet, db, evict, jobs, queue, tasks
 from .config import settings
 from .errors import FHError
 from .resolver import Collection, SourceResolver
@@ -269,6 +269,7 @@ def health(request: Request):
         "disk_free_bytes": du.free if du else None,
         "index_backend": s.index_backend,
         "colab": _colab_health(),
+        "bitmagnet": {"state": "ok" if s.bitmagnet_url else "not_configured"},
         "encoders": _encoder_state,
         "visual_encoder": _visual_state,
         "face_encoder": _face_state,
@@ -303,6 +304,8 @@ def _colab_health() -> dict:
 
 class AddMovie(BaseModel):
     source: str = Field(min_length=1, max_length=4096)
+    # A display title to use over the source's own (e.g. a magnet's release name).
+    title: str | None = Field(default=None, max_length=300)
 
 
 @app.get("/movies")
@@ -335,7 +338,8 @@ async def add_movie(request: Request):
         body = AddMovie.model_validate(await request.json())
     except Exception as e:
         raise FHError("unrecognized", "Paste a link to a movie.", detail=str(e)) from e
-    return await run_in_threadpool(_add_movie, body.source.strip())
+    title = (body.title or "").strip() or None
+    return await run_in_threadpool(_add_movie, body.source.strip(), title)
 
 
 def _add_torrent_file(data: bytes):
@@ -343,7 +347,7 @@ def _add_torrent_file(data: bytes):
     return _create_movie(res, torrent=data)
 
 
-def _add_movie(source: str):
+def _add_movie(source: str, title: str | None = None):
     resolver = SourceResolver()
     try:
         res = resolver.resolve(source)
@@ -351,6 +355,8 @@ def _add_movie(source: str):
         resolver.client.close()
     if isinstance(res, Collection):
         return JSONResponse(_collection_out(res), status_code=200)
+    if title:
+        res.title = title
     return _create_movie(res)
 
 
@@ -392,6 +398,17 @@ def collection_items(identifier: str, q: str | None = None):
         return _collection_out(resolver.collection(identifier, q=q))
     finally:
         resolver.client.close()
+
+
+@app.get("/torrents/search")
+async def find_torrents(q: str = Query(default="", max_length=200)):
+    if not settings().bitmagnet_url:
+        raise FHError("not_configured", "Finding movies by name needs Bitmagnet. "
+                      "Set BITMAGNET_URL on the server.", status=404)
+    q = q.strip()
+    if len(q) < 2:
+        raise FHError("unrecognized", "Type at least two letters of the movie's name.")
+    return await run_in_threadpool(bitmagnet.search, q)
 
 
 @app.get("/movies/{movie_id}")

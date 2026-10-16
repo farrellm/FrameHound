@@ -1,0 +1,18 @@
+# Lets the api find movies by name in Bitmagnet (docker/bitmagnet). Turn it on
+# with this line in .env, once Bitmagnet's stack is up:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.bitmagnet.yml
+# Bitmagnet has no auth, so its port stays on localhost; the api reaches it over
+# Bitmagnet's own Docker network instead.
+
+services:
+  api:
+    environment:
+      BITMAGNET_URL: http://bitmagnet:3333
+    networks:
+      - default
+      - bitmagnet
+
+networks:
+  bitmagnet:
+    name: bitmagnet_default
+    external: true

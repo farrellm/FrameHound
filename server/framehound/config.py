@@ -77,6 +77,9 @@ class Settings:
     # Dev/test only: peers every torrent download connects to ("host:port,...").
     torrent_peers: tuple[str, ...] = field(default_factory=lambda: tuple(
         p.strip() for p in _env("FH_TORRENT_PEERS", "").split(",") if p.strip()))
+    # Bitmagnet (a local DHT crawler) for finding movies by name; empty = off.
+    bitmagnet_url: str = field(default_factory=lambda: _env("BITMAGNET_URL", "").rstrip("/"))
+    bitmagnet_timeout_s: float = field(default_factory=lambda: _float("BITMAGNET_TIMEOUT", 10))
     # Clips.
     max_gif_s: float = field(default_factory=lambda: _float("MAX_GIF_S", 15))
     # Disk quota for movies/ in GB; 0 = none. LRU eviction (design.md §10).

@@ -1,0 +1,22 @@
+{"data": {"torrentContent": {"search": {"totalCount": 4, "items": [
+  {"infoHash": "8bc7dd50adb67c50e3c5543164f3d55afcd9cd3e", "seeders": 8, "leechers": 1,
+   "videoResolution": "V1080p", "videoSource": "BluRay", "videoCodec": "x265",
+   "torrent": {"name": "Night.of.the.Living.Dead.1968.REMASTERED.1080p.BluRay.x265-RARBG", "size": 1616545656, "filesCount": 4,
+               "magnetUri": "magnet:?xt=urn:btih:8bc7dd50adb67c50e3c5543164f3d55afcd9cd3e&dn=Night.of.the.Living.Dead.1968.REMASTERED.1080p.BluRay.x265-RARBG&xl=1616545656"},
+   "content": {"id": "10331", "title": "Night of the Living Dead", "releaseYear": 1968, "runtime": 96}},
+  {"infoHash": "4618266ba83303441dac63ad9bbab65cb124177d", "seeders": 0, "leechers": 1,
+   "videoResolution": null, "videoSource": "DVD", "videoCodec": "XviD",
+   "torrent": {"name": "Night.Of.The.Living.Dead.Reanimated.2009.DVDRip.XviD-FRAGMENT", "size": 740248071, "filesCount": 4,
+               "magnetUri": "magnet:?xt=urn:btih:4618266ba83303441dac63ad9bbab65cb124177d&dn=Night.Of.The.Living.Dead.Reanimated.2009.DVDRip.XviD-FRAGMENT"},
+   "content": {"id": "41206", "title": "Night of the Living Dead: Reanimated", "releaseYear": 2009, "runtime": 103}},
+  {"infoHash": "2f2925a3d0f9a8198cc8b76cf8093649e7e5956d", "seeders": 9, "leechers": 4,
+   "videoResolution": null, "videoSource": "DVD", "videoCodec": "x265",
+   "torrent": {"name": "Homicide.Life.on.the.Street.COMPLETE.&.The.Movie.2000.10bit.DVDRip.x265-budgetbits", "size": 29374360343, "filesCount": 124,
+               "magnetUri": "magnet:?xt=urn:btih:2f2925a3d0f9a8198cc8b76cf8093649e7e5956d&dn=Homicide"},
+   "content": null},
+  {"infoHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "seeders": 30, "leechers": null,
+   "videoResolution": "V720p", "videoSource": "WEBRip", "videoCodec": null,
+   "torrent": {"name": "Night.of.the.Living.Dead.1968.720p.WEBRip", "size": 900000000, "filesCount": 1,
+               "magnetUri": "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&dn=Night.of.the.Living.Dead.1968.720p.WEBRip"},
+   "content": {"id": "10331", "title": "Night of the Living Dead", "releaseYear": 1968, "runtime": 96}}
+]}}}}

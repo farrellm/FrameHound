@@ -128,6 +128,12 @@ All models are pinned in one `models.lock` file (model id, revision or commit ha
   - Seeding is configurable (`SEED_RATIO`, default 0 = stop when complete; at most `SEED_MAX_S`).
   - A stall timeout applies: the job fails with `torrent_stalled` when there are no peers, or no progress, for `TORRENT_STALL_S` (default 10 min), including while waiting for a magnet's metadata. The Downloading stage shows the peer count.
   - The SSRF rule holds for peers too: an IP filter refuses loopback, RFC1918, link-local, CGNAT and multicast peers and trackers, and libtorrent's `ssrf_mitigation` is on.
+- **Finding a torrent by name (Bitmagnet).** This is optional and on when `BITMAGNET_URL` is set. [Bitmagnet](https://bitmagnet.io) (`docker/bitmagnet`) crawls the DHT and matches torrents to TMDB films.
+  - `server/framehound/bitmagnet.py` sends one GraphQL `torrentContent.search` (content type `movie`, relevance order, 40 results).
+  - It groups the releases under the film they matched, in the order of each film's best-ranked release, with releases sorted by seeders. Torrents with no film match come last.
+  - Releases over `MAX_BYTES` are flagged `too_big`.
+  - The user's pick is added as an ordinary magnet (`POST /movies` with the film's title), so everything above applies unchanged.
+  - The URL is set by the operator, so the call skips the SSRF guard. In compose, `docker-compose.bitmagnet.yml` joins the api to Bitmagnet's network, and Bitmagnet's unauthenticated port stays on localhost.
 
 ### Validation and normalization
 
@@ -306,8 +312,9 @@ Options:
 
 | Method & path | Body / params | Returns |
 |---|---|---|
-| `POST /movies` | `{source: url \| magnet}` or multipart `.torrent` | `{movie_id, job_id}`, or `{collection, choices: [...]}` for an archive.org collection, or `409 {code: duplicate, movie_id}` |
+| `POST /movies` | `{source: url \| magnet, title?}` or multipart `.torrent` (`title` overrides the source's own, e.g. a magnet's release name) | `{movie_id, job_id}`, or `{collection, choices: [...]}` for an archive.org collection, or `409 {code: duplicate, movie_id}` |
 | `GET /collections/{identifier}` | `?q=` (title search) | `{collection: {identifier, title, total}, choices: [...]}`: the picker sheet's search, top 100 by downloads |
+| `GET /torrents/search` | `?q=` (2–200 chars) | `{films: [{title, year, runtime_min, releases: [...]}], unmatched: [...], total, max_bytes}` from Bitmagnet. Each release has `{info_hash, magnet, name, size, files, seeders, leechers, resolution, source, codec, too_big}`. `404 not_configured` without `BITMAGNET_URL`, `502 bitmagnet_unreachable` |
 | `GET /movies` / `GET /movies/{id}` | — | movie metadata + status, latest ingest/index job, `capabilities` (`dialogue`, `visual`, `faces`), `models_ok` |
 | `DELETE /movies/{id}` | — | `204`; cancels its jobs and removes its files (**Remove movie**) |
 | `POST /movies/{id}/retry` | — | `202 {job_id, kind}`: restarts at the first missing step (download/proxy, else indexing). Also **Re-index** |
@@ -321,7 +328,7 @@ Options:
 | `GET /clips/{id}/file` | — | the clip (Range-enabled) |
 | `GET /jobs/{id}` | — | job state with per-stage progress |
 | `GET /media/{id}/proxy.mp4` | — | proxy for the player (Range-enabled) |
-| `GET /health` | — | redis, disk, `colab` auth status, compute-unit balance; only `{auth_required, signed_in}` without the token |
+| `GET /health` | — | redis, disk, `colab` auth status, compute-unit balance, `bitmagnet.state` (`ok` \| `not_configured`, from config only); only `{auth_required, signed_in}` without the token |
 | `POST /auth` / `DELETE /auth` | `{token}` | sets / clears the sign-in cookie (`401 bad_token` for a wrong token) |
 
 ## 9. Data model (SQLite)

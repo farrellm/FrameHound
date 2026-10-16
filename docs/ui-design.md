@@ -175,6 +175,7 @@ iPhone                                Desktop
   - On iPhone the keyboard is `inputmode="url"`, and on focus a **Paste** chip appears above the keyboard. Most links arrive by copying from Safari.
   - "Choose a .torrent file" opens the Files picker.
   - The button is disabled until the field parses as one of the three source types.
+  - **With Bitmagnet configured**, the field also takes a movie's name. Its placeholder becomes "Paste a link, or type a movie's name". Text that isn't a link (two letters or more) makes **Add movie** open the release picker below instead of starting a job. It is the same verb and the same pattern as a collection.
 - **Each movie row is a short film strip**: three (phone) or five (desktop) shot thumbnails, then the title, duration, and state. Rows are separated by the strip's own sprocket edge, with no divider lines. Tapping a row opens the Movie screen.
   - A row in progress shows the current stage name and a percentage.
   - A failed row shows **Indexing failed** in `--danger` and the one-line cause.
@@ -195,6 +196,36 @@ iPhone                                Desktop
 └────────────────────────────────┘
 ```
 
+**Finding a movie by name.** The picker groups releases under the film Bitmagnet matched them to, like the labels on film cans. Each heading is the film's title, with its year and runtime in `--fog`. Releases are radio rows, most seeders first:
+
+```
+┌────────────────────────────────┐
+│ Pick a release to add.         │
+│ ┌────────────────────────────┐ │
+│ │ night of the living dead   │ │
+│ └────────────────────────────┘ │
+│ 4 torrents Bitmagnet has seen  │
+│                                │
+│ Night of the Living Dead       │
+│ 1968   1 h 36 min              │
+│ (●) 1080p BluRay x265   1.5 GB │
+│     8 seeders                  │
+│     Night.of.the.Living.Dead…  │
+│                                │
+│ Not matched to a film          │
+│ ( ) DVD x265   27.4 GB         │
+│     124 files   9 seeders      │
+│     Homicide.Life.on.the.Str…  │
+│ ▓▓▓▓▓▓▓▓ Add movie ▓▓▓▓▓▓▓▓▓▓ │
+└────────────────────────────────┘
+```
+
+- The field at the top refines the search (300 ms after typing stops).
+- Each release shows its quality (resolution, source, codec) in bold, then its size, its seeders in words, and the release name on one truncated line in `--fog`. Fields are separated by space, never by middle dots.
+- File counts appear only under **Not matched to a film**, where they give away a season pack.
+- A release over the size limit is disabled, with the reason inline.
+- **Add movie** stays pinned at the bottom while the list scrolls. The movie is titled "Night of the Living Dead (1968)", not by its release name.
+
 **States**
 
 | State | Copy |
@@ -205,6 +236,11 @@ iPhone                                Desktop
 | Collection with no videos | "This collection has no movies FrameHound can index. Try a link to a single item." |
 | Blocked address (SSRF guard) | "FrameHound can't download from private network addresses. Use a public link." |
 | Torrent with no video | "This torrent has no movie file FrameHound can index." |
+| Finding: looking | The note under the field reads "Looking…". There is no spinner. |
+| Finding: no results | "Bitmagnet hasn't seen a movie torrent called that. It keeps crawling, so try another spelling or check back later." |
+| Finding: Bitmagnet down | "FrameHound can't reach Bitmagnet. Check that it's running on the server." with **Details** |
+| Finding: no seeders | Under the release: "No seeders seen. It may not download." It can still be picked. |
+| Finding: too large | Under the release: "Larger than this FrameHound's 40 GB limit". The radio is disabled. |
 | Removed to save space | Row state "Removed to save space". The Movie screen says FrameHound removed the files to stay under its disk limit, with **Re-download** (downloads and indexes again) and **Remove movie**. |
 
 ### 4.2 Indexing progress
@@ -483,7 +519,7 @@ Tone rules:
 
 | Screen | Calls ([design.md §8](design.md#8-api)) |
 |---|---|
-| Library | `GET /movies`, `POST /movies` (returns `{choices}` for a collection, which opens the picker sheet) |
+| Library | `GET /movies`, `POST /movies` (returns `{choices}` for a collection, which opens the picker sheet), `GET /torrents/search` (the release picker) |
 | Indexing | `GET /movies/{id}`, `GET /jobs/{id}/events` (SSE), `POST /jobs/{id}/cancel` |
 | Search | `POST /movies/{id}/search` (`candidates` populate the list, `heat` draws the strip), `GET /media/{id}/proxy.mp4` |
 | Export | `POST /movies/{id}/clips`, `GET /jobs/{id}/events`, `GET /clips/{id}/file` |

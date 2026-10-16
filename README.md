@@ -16,6 +16,7 @@ picture, or a line of dialogue, and cuts a clip. See [docs/design.md](docs/desig
   fails after `TORRENT_STALL_S`, and seeding is off unless `SEED_RATIO` is set.
   Compose publishes the BitTorrent port (`TORRENT_PORT`, default 6881, TCP and
   UDP) on worker-io so peers can connect in.
+- Finding a movie by name: with [Bitmagnet](https://bitmagnet.io) running (`docker/bitmagnet`), type a title into the add field and pick a release, grouped by film.
 - ffprobe validation, content-hash deduplication, and a 720p proxy for playback.
 - `ColabIndexBackend` (the default): a Colab GPU per movie through the `colab`
   CLI, with GPU fallback, a compute-unit budget, a detached run polled every
@@ -63,6 +64,16 @@ Movies, indexes, and model weights live in the `fh-data` volume. The first index
 downloads Whisper large-v3 (about 3 GB). On a CPU, large-v3 takes roughly as long
 as the film, so for trying things out set `FH_MODELS_LOCK=models.tiny.lock` in
 `.env`. An index can only be searched by an api running the same lock.
+
+### Finding movies with Bitmagnet
+
+`docker/bitmagnet` runs Bitmagnet, a DHT crawler (`docker compose up -d` in that directory, or install `docker/bitmagnet/bitmagnet.service` as a user unit). Set `TMDB_API_KEY` in its `.env` so that torrents are matched to films. Then add this line to FrameHound's `.env` and restart the stack:
+
+```sh
+COMPOSE_FILE=docker-compose.yml:docker-compose.bitmagnet.yml
+```
+
+The override joins the api to Bitmagnet's Docker network. Bitmagnet's own port has no auth, so it stays on localhost. Outside compose, set `BITMAGNET_URL=http://localhost:3333`. Bitmagnet only knows torrents it has crawled, so results grow over the first days.
 
 ### As a service on the tailnet
 

@@ -4,6 +4,7 @@ import { useAnnouncer } from "../components/Announcer";
 import { ErrorDetails } from "../components/ErrorDetails";
 import { MiniStrip } from "../components/MiniStrip";
 import { Sheet } from "../components/Sheet";
+import { FindSheet } from "./FindSheet";
 import { fmtDuration } from "../format";
 import { linkProps, navigate } from "../router";
 import { activeLabel } from "../stages";
@@ -24,9 +25,13 @@ export function Library() {
   const [movies, setMovies] = useState<Movie[] | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [colabBroken, setColabBroken] = useState(false);
+  const [canFind, setCanFind] = useState(false);
   useEffect(() => {
     api.health().then(
-      (h) => setColabBroken(h.colab?.state === "auth_broken"),
+      (h) => {
+        setColabBroken(h.colab?.state === "auth_broken");
+        setCanFind(h.bitmagnet?.state === "ok");
+      },
       () => {},
     );
   }, []);
@@ -64,7 +69,7 @@ export function Library() {
           Colab sign-in has expired. On the server, sign the colab CLI in again, then retry indexing.
         </p>
       )}
-      <AddMovie onAdded={load} />
+      <AddMovie onAdded={load} canFind={canFind} />
       {loadError && (
         <p className="message danger" role="alert">
           {loadError.message}
@@ -124,28 +129,31 @@ function MovieRow({ movie: m }: { movie: Movie }) {
   );
 }
 
-function AddMovie({ onAdded }: { onAdded: () => void }) {
+function AddMovie({ onAdded, canFind }: { onAdded: () => void; canFind: boolean }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [focused, setFocused] = useState(false);
   const [collection, setCollection] = useState<CollectionResult | null>(null);
+  // A movie's name to look up in Bitmagnet, while the find sheet is open.
+  const [finding, setFinding] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const { announce } = useAnnouncer();
   const canPaste = typeof navigator.clipboard?.readText === "function";
 
   const torrentInput = useRef<HTMLInputElement>(null);
 
-  async function submit(source: string | File) {
+  async function submit(source: string | File, title?: string) {
     setBusy(true);
     setError(null);
     try {
-      const r = typeof source === "string" ? await api.addMovie(source) : await api.addTorrent(source);
+      const r = typeof source === "string" ? await api.addMovie(source, title) : await api.addTorrent(source);
       if (isCollection(r)) {
         setCollection(r);
       } else {
         setText("");
         setCollection(null);
+        setFinding(null);
         onAdded();
         navigate(`/m/${r.movie_id}`);
       }
@@ -158,7 +166,8 @@ function AddMovie({ onAdded }: { onAdded: () => void }) {
     }
   }
 
-  const valid = parses(text);
+  const isLink = parses(text);
+  const valid = isLink || (canFind && text.trim().length >= 2);
   return (
     <>
       <form
@@ -175,11 +184,12 @@ function AddMovie({ onAdded }: { onAdded: () => void }) {
             );
             return;
           }
-          submit(text.trim());
+          if (isLink) submit(text.trim());
+          else setFinding(text.trim());
         }}
       >
         <label htmlFor="source" className="visually-hidden">
-          Movie link
+          {canFind ? "Movie link or name" : "Movie link"}
         </label>
         <div className="add-row">
           <input
@@ -193,7 +203,7 @@ function AddMovie({ onAdded }: { onAdded: () => void }) {
             autoCorrect="off"
             spellCheck={false}
             enterKeyHint="go"
-            placeholder="Paste a movie link or magnet link"
+            placeholder={canFind ? "Paste a link, or type a movie's name" : "Paste a movie link or magnet link"}
             value={text}
             onChange={(e) => {
               setText(e.target.value);
@@ -245,7 +255,7 @@ function AddMovie({ onAdded }: { onAdded: () => void }) {
             }}
           />
         </p>
-        {error && (
+        {error && !finding && (
           <div id="add-error" role="alert">
             <p className="message danger">{error.message}</p>
             {error.code === "duplicate" && typeof error.extra.movie_id === "string" && (
@@ -257,6 +267,18 @@ function AddMovie({ onAdded }: { onAdded: () => void }) {
           </div>
         )}
       </form>
+      {finding && (
+        <FindSheet
+          initialQuery={finding}
+          busy={busy}
+          error={error}
+          onPick={(magnet, title) => submit(magnet, title)}
+          onClose={() => {
+            setFinding(null);
+            setError(null);
+          }}
+        />
+      )}
       {collection && (
         <CollectionSheet
           initial={collection}
