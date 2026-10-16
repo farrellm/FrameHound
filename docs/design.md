@@ -81,7 +81,7 @@ The screens, visual language, and iPhone behavior are specified in [ui-design.md
 | `web` | React + Vite SPA, with a video player (native `<video>` playing an HTTP-range-served proxy), a timeline, and the search UI. |
 | `api` | FastAPI app. Provides REST plus SSE for job progress. Search runs **in process**: the query encoders are loaded once at startup and the per-movie FAISS indexes are memory-mapped. |
 | `redis` | Backs the RQ job queues. |
-| `worker-io` | Downloads (HTTP, archive.org, libtorrent), runs `ffprobe`, transcodes the proxy, and cuts clips. |
+| `worker-io` | Downloads (HTTP, archive.org, libtorrent), runs `ffprobe`, transcodes the proxy, and cuts clips. A pool of `MAX_DOWNLOADS` (default 3) RQ workers, so that many jobs run at once; each torrent claims its own listen port (`TORRENT_PORT` + slot). |
 | `worker-index` | Runs `IndexBackend` jobs. It is a thin orchestrator that does no ML itself. `ColabIndexBackend` is the default and `LocalIndexBackend` is the fallback. |
 
 ### Shared indexer package

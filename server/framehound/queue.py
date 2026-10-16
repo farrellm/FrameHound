@@ -12,7 +12,17 @@ TASKS = {"ingest": "framehound.tasks.run_ingest", "index": "framehound.tasks.run
          "clip": "framehound.tasks.run_clip"}
 
 
-_inline_locks = {name: threading.Lock() for name in set(QUEUES.values())}
+_inline_slots: dict[str, threading.BoundedSemaphore] = {}
+_inline_guard = threading.Lock()
+
+
+def _inline_slot(queue_name: str) -> threading.BoundedSemaphore:
+    """As many jobs at once per queue as RQ workers on it: MAX_DOWNLOADS for io."""
+    with _inline_guard:
+        if queue_name not in _inline_slots:
+            n = settings().max_downloads if queue_name == "io" else 1
+            _inline_slots[queue_name] = threading.BoundedSemaphore(n)
+        return _inline_slots[queue_name]
 
 
 def _timeout(kind: str) -> int:
@@ -34,10 +44,10 @@ def enqueue(kind: str, job_id: str) -> None:
         return
     mod, _, fn = TASKS[kind].rpartition(".")
     func = getattr(importlib.import_module(mod), fn)
-    lock = _inline_locks[QUEUES[kind]]
+    slot = _inline_slot(QUEUES[kind])
 
     def run() -> None:
-        with lock:  # one job per queue at a time, like one RQ worker per queue
+        with slot:
             func(job_id)
 
     threading.Thread(target=run, name=f"fh-{kind}-{job_id}", daemon=True).start()

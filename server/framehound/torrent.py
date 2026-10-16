@@ -7,10 +7,14 @@ video file is downloaded; every other file gets priority 0.
 
 from __future__ import annotations
 
+import fcntl
 import ipaddress
+import logging
+import re
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -19,6 +23,8 @@ import libtorrent as lt
 from .config import settings
 from .errors import FHError
 from .media import VIDEO_EXTS
+
+log = logging.getLogger("framehound.torrent")
 
 TORRENT_FILE = "source.torrent"
 WORK_DIR = "torrent"
@@ -82,10 +88,50 @@ def _ip_filter() -> lt.ip_filter:
     return f
 
 
-def _session() -> lt.session:
+def listen_on(listen: str, offset: int | None) -> str:
+    """``listen`` (libtorrent's ``host:port[flags],...``) with each nonzero port
+    moved up by ``offset``, or with every port 0 (any free one) for None."""
+    out = []
+    for iface in listen.split(","):
+        m = re.fullmatch(r"(.*):(\d+)([a-z]*)", iface.strip())
+        if m is None:
+            raise ValueError(f"bad TORRENT_LISTEN entry: {iface!r}")
+        host, port, flags = m[1], int(m[2]), m[3]
+        out.append(f"{host}:{port + offset if port and offset is not None else 0}{flags}")
+    return ",".join(out)
+
+
+@contextmanager
+def port_slot() -> Iterator[int | None]:
+    """Claim one of ``MAX_DOWNLOADS`` listen ports for a download.
+
+    Concurrent downloads run in separate worker processes (or threads in dev),
+    so each needs its own port: slot ``k`` listens ``k`` above TORRENT_LISTEN.
+    A slot is an flock on a file, freed when its holder exits however it exits.
+    Yields None (listen on any free port) if every slot is taken.
+    """
+    s = settings()
+    d = s.data_dir / "torrent-ports"
+    d.mkdir(parents=True, exist_ok=True)
+    for k in range(s.max_downloads):
+        f = open(d / f"{k}.lock", "w")  # noqa: SIM115 (held across the yield)
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            f.close()
+            continue
+        with f:
+            yield k
+        return
+    log.warning("all %d torrent ports are taken; listening on a random one",
+                s.max_downloads)
+    yield None
+
+
+def _session(slot: int | None) -> lt.session:
     s = settings()
     pack = {
-        "listen_interfaces": s.torrent_listen,
+        "listen_interfaces": listen_on(s.torrent_listen, slot),
         "enable_upnp": False, "enable_natpmp": False,
         "ssrf_mitigation": not s.allow_private_urls,
         "allow_multiple_connections_per_ip": s.allow_private_urls,
@@ -129,15 +175,17 @@ def download_torrent(movie_dir: Path, magnet: str | None, on_file: Callable[[Tor
     else:
         raise FHError("source_missing", "The torrent for this movie is gone. Add it again.")
     params.save_path = str(work)
-    sess = _session()
-    try:
-        h = sess.add_torrent(params)
-        for peer in s.torrent_peers:
-            host, _, port = peer.rpartition(":")
-            h.connect_peer((host, int(port)))
-        return _run(sess, h, movie_dir, work, on_file, on_progress, check_cancel, s)
-    finally:
-        sess.pause()
+    with port_slot() as slot:
+        sess = _session(slot)
+        try:
+            h = sess.add_torrent(params)
+            for peer in s.torrent_peers:
+                host, _, port = peer.rpartition(":")
+                h.connect_peer((host, int(port)))
+            return _run(sess, h, movie_dir, work, on_file, on_progress, check_cancel, s)
+        finally:
+            sess.pause()
+            del sess  # closes the listen socket before the slot is freed
 
 
 def _run(sess, h, movie_dir: Path, work: Path, on_file, on_progress, check_cancel, s) -> Path:

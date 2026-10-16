@@ -31,15 +31,16 @@ services:
   worker-io:
     <<: *backend
     command: ["framehound-worker", "io"]
-    # Torrents download here. Publishing the port lets peers connect in, not
-    # just out, for better swarms. Same number inside and out: libtorrent tells
-    # peers the port it listens on.
+    # Torrents download here, MAX_DOWNLOADS at once, each on its own port from
+    # TORRENT_PORT up. Publishing the ports lets peers connect in, not just out,
+    # for better swarms. Same numbers inside and out: libtorrent tells peers the
+    # port it listens on.
     environment:
       REDIS_URL: redis://redis:6379/0
       TORRENT_LISTEN: 0.0.0.0:${TORRENT_PORT:-6881},[::]:${TORRENT_PORT:-6881}
     ports:
-      - "${TORRENT_PORT:-6881}:${TORRENT_PORT:-6881}/tcp"
-      - "${TORRENT_PORT:-6881}:${TORRENT_PORT:-6881}/udp"
+      - "${TORRENT_PORT:-6881}-${TORRENT_PORT_LAST:-6883}:${TORRENT_PORT:-6881}-${TORRENT_PORT_LAST:-6883}/tcp"
+      - "${TORRENT_PORT:-6881}-${TORRENT_PORT_LAST:-6883}:${TORRENT_PORT:-6881}-${TORRENT_PORT_LAST:-6883}/udp"
 
   worker-index:
     <<: *backend

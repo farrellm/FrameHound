@@ -70,6 +70,9 @@ class Settings:
     # Torrents (design.md §4): host only, the main video file only.
     seed_ratio: float = field(default_factory=lambda: _float("SEED_RATIO", 0))
     seed_max_s: int = field(default_factory=lambda: _int("SEED_MAX_S", 3600))
+    # io jobs (downloads, proxies, clips) at once: worker-io runs this many RQ
+    # workers, and each torrent listens on its own port from TORRENT_LISTEN up.
+    max_downloads: int = field(default_factory=lambda: max(1, _int("MAX_DOWNLOADS", 3)))
     torrent_stall_s: float = field(default_factory=lambda: _float("TORRENT_STALL_S", 600))
     torrent_listen: str = field(default_factory=lambda: _env(
         "TORRENT_LISTEN", "0.0.0.0:6881,[::]:6881"))

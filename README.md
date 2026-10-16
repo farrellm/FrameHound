@@ -14,8 +14,9 @@ picture, or a line of dialogue, and cuts a clip. See [docs/design.md](docs/desig
   (never on Colab; the proxy is uploaded to the VM instead). Only the largest
   video file is fetched, private-network peers are refused, a stalled torrent
   fails after `TORRENT_STALL_S`, and seeding is off unless `SEED_RATIO` is set.
-  Compose publishes the BitTorrent port (`TORRENT_PORT`, default 6881, TCP and
-  UDP) on worker-io so peers can connect in.
+  Up to `MAX_DOWNLOADS` (default 3) downloads run at once, each on its own
+  BitTorrent port; compose publishes `TORRENT_PORT`–`TORRENT_PORT_LAST`
+  (default 6881–6883, TCP and UDP) on worker-io so peers can connect in.
 - Finding a movie by name: with [Bitmagnet](https://bitmagnet.io) running (`docker/bitmagnet`), type a title into the add field and pick a release, grouped by film.
 - ffprobe validation, content-hash deduplication, and a 720p proxy for playback.
 - `ColabIndexBackend` (the default): a Colab GPU per movie through the `colab`

@@ -6,7 +6,7 @@ import libtorrent as lt
 import pytest
 from framehound import config, db, tasks
 from framehound.errors import FHError
-from framehound.torrent import download_torrent
+from framehound.torrent import download_torrent, listen_on, port_slot
 from test_pipeline_flow import client, enqueued, make_video  # noqa: F401
 
 
@@ -109,3 +109,19 @@ def test_private_peers_are_blocked(tmp_path, monkeypatch, seeder):
     with pytest.raises(FHError) as e:
         _download(tmp_path, seeder["magnet"])
     assert e.value.code == "torrent_stalled"
+
+
+def test_listen_on_offsets_ports():
+    listen = "0.0.0.0:6881,[::]:6881s,127.0.0.1:0"
+    assert listen_on(listen, 0) == listen
+    assert listen_on(listen, 2) == "0.0.0.0:6883,[::]:6883s,127.0.0.1:0"
+    assert listen_on(listen, None) == "0.0.0.0:0,[::]:0s,127.0.0.1:0"
+
+
+def test_port_slots_are_exclusive(monkeypatch):
+    monkeypatch.setenv("MAX_DOWNLOADS", "2")
+    config.reset_settings()
+    with port_slot() as a, port_slot() as b, port_slot() as c:
+        assert (a, b, c) == (0, 1, None)
+    with port_slot() as a:
+        assert a == 0  # freed again

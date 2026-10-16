@@ -1,5 +1,8 @@
 """``framehound-worker QUEUE``: an RQ worker, plus Colab housekeeping for ``index``.
 
+``io`` alone runs a pool of ``MAX_DOWNLOADS`` workers, so that many downloads
+(and proxies and clips) run at once. The pool respawns a worker that dies.
+
 Before taking jobs, the index worker re-attaches to Colab jobs whose VM kept
 indexing while the worker was down, and it runs the session reconciler at
 startup and every ``RECONCILE_S`` (design.md §5, Robustness).
@@ -47,6 +50,10 @@ def main(argv: list[str] | None = None) -> None:
         threading.Thread(target=colab_housekeeping, daemon=True, name="colab").start()
     from redis import Redis
     from rq import Queue, Worker
+    from rq.worker_pool import WorkerPool
 
     conn = Redis.from_url(s.redis_url or "redis://redis:6379/0")
+    if queues == ["io"] and s.max_downloads > 1:
+        WorkerPool(queues, connection=conn, num_workers=s.max_downloads).start()
+        return
     Worker([Queue(q, connection=conn) for q in queues], connection=conn).work()
