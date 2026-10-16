@@ -7,4 +7,5 @@ node_modules/
 web/dist/
 data/
 .env
+docker/bitmagnet/.env
 *.tsbuildinfo

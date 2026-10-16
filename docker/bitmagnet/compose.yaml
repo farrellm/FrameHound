@@ -1,0 +1,48 @@
+name: bitmagnet
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bitmagnet-postgres
+    shm_size: 1g
+    environment:
+      POSTGRES_DB: bitmagnet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGUSER: postgres
+    volumes:
+      - bitmagnet_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d bitmagnet"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  bitmagnet:
+    image: ghcr.io/bitmagnet-io/bitmagnet:v0.10.0
+    container_name: bitmagnet
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - worker
+      - run
+      - --keys=http_server
+      - --keys=queue_server
+      - --keys=dht_crawler
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+    volumes:
+      - bitmagnet_config:/root/.config/bitmagnet
+    ports:
+      # Web UI / GraphQL / Torznab (no auth, so localhost only)
+      - "127.0.0.1:3333:3333"
+      # BitTorrent DHT
+      - "3334:3334/tcp"
+      - "3334:3334/udp"
+
+volumes:
+  bitmagnet_pg:
+  bitmagnet_config:

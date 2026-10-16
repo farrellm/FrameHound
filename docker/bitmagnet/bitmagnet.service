@@ -1,0 +1,15 @@
+[Unit]
+Description=Bitmagnet DHT crawler (docker compose)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/workspace/FrameHound/docker/bitmagnet
+# User units can't order against the system docker.service; wait for the daemon instead.
+ExecStartPre=/bin/sh -c 'until /usr/bin/docker info >/dev/null 2>&1; do sleep 2; done'
+ExecStart=/usr/bin/docker compose up -d --wait
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
