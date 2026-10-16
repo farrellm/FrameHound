@@ -1,0 +1,15 @@
+{
+ "metadata": {
+  "identifier": "some_audio",
+  "mediatype": "audio",
+  "title": "Some Audio"
+ },
+ "files": [
+  {
+   "name": "track.mp3",
+   "source": "original",
+   "format": "VBR MP3",
+   "size": "1000"
+  }
+ ]
+}

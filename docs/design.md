@@ -297,15 +297,20 @@ Options:
 
 | Method & path | Body / params | Returns |
 |---|---|---|
-| `POST /movies` | `{source: url \| magnet}` or multipart `.torrent` | `{movie_id, job_id}` or `{choices: [...]}` for an archive.org collection |
-| `GET /movies` / `GET /movies/{id}` | — | movie metadata + status |
-| `GET /jobs/{id}/events` | — | SSE stream of `{stage, pct, eta_s, message}` |
+| `POST /movies` | `{source: url \| magnet}` or multipart `.torrent` | `{movie_id, job_id}`, or `{collection, choices: [...]}` for an archive.org collection, or `409 {code: duplicate, movie_id}` |
+| `GET /collections/{identifier}` | `?q=` (title search) | `{collection: {identifier, title, total}, choices: [...]}`: the picker sheet's search, top 100 by downloads |
+| `GET /movies` / `GET /movies/{id}` | — | movie metadata + status, latest ingest/index job, `capabilities` (`dialogue`, `visual`, `faces`), `models_ok` |
+| `DELETE /movies/{id}` | — | `204`; cancels its jobs and removes its files (**Remove movie**) |
+| `POST /movies/{id}/retry` | — | `202 {job_id, kind}`: restarts at the first missing step (download/proxy, else indexing). Also **Re-index** |
+| `GET /jobs/{id}/events` | — | SSE stream of the job (`state`, `stage`, `pct`, `eta_s`, `error`, per-stage `stages`); event ids are the job's `seq`, so `Last-Event-ID` resumes |
 | `POST /jobs/{id}/cancel` | — | `202` (also stops the Colab session) |
 | `GET /movies/{id}/index-progress` | — | snapshot of every index stage `{stage, state: pending\|running\|done\|failed, pct, eta_s}` plus `gpu` and `compute_units_used`; the UI calls it when a page resumes, then reopens SSE |
 | `GET /movies/{id}/shots` | `?from=&to=` (seconds; default whole movie) | `[{idx, start, end, thumb_url}]` for the strip at the current zoom |
 | `POST /movies/{id}/search` | `{type: text\|image\|dialogue, q?, image? (multipart), top_k?, also_dialogue?, heat_bins?}` | `{candidates: [...], heat: [...]}` (see §6 for candidate fields) |
 | `POST /movies/{id}/clips` | `{start, end, mode: accurate\|fast, format: mp4\|gif, subs?, crop?}` | `{clip_id, job_id}` |
+| `GET /clips/{id}` | — | clip metadata, `ready`, and its job |
 | `GET /clips/{id}/file` | — | the clip (Range-enabled) |
+| `GET /jobs/{id}` | — | job state with per-stage progress |
 | `GET /media/{id}/proxy.mp4` | — | proxy for the player (Range-enabled) |
 | `GET /health` | — | redis, disk, `colab` auth status, compute-unit balance |
 
@@ -313,12 +318,17 @@ Options:
 
 ```sql
 movies(id TEXT PK, sha256 TEXT UNIQUE, title, source_kind, source_ref,
+       source_url, source_md5, source_file,
        duration_s REAL, width, height, fps, bytes, models_lock_hash,
-       status TEXT, created_at, last_accessed_at)
+       status TEXT /* ingesting|indexing|ready|failed|cancelled|merged */,
+       error TEXT, merged_into TEXT, created_at, last_accessed_at)
 jobs(id TEXT PK, movie_id, kind TEXT /* ingest|index|clip */, state TEXT,
-     stage TEXT, pct REAL, error TEXT, attempt INT,
-     colab_session TEXT, gpu TEXT, compute_units_used REAL,
-     started_at, finished_at)
+     stage TEXT, pct REAL, eta_s REAL, message TEXT, error TEXT, error_code TEXT,
+     attempt INT, colab_session TEXT, gpu TEXT, compute_units_used REAL,
+     backend_handle TEXT, cancel_requested INT, seq INT /* bumps on every write */,
+     started_at, finished_at, heartbeat_at, created_at)
+job_stages(job_id, stage, ord INT, state TEXT /* pending|running|done|failed|skipped */,
+           pct REAL, eta_s REAL, PRIMARY KEY(job_id, stage))
 shots(movie_id, idx INT, start REAL, end REAL, PRIMARY KEY(movie_id, idx))
 frames(movie_id, row INT, t REAL, shot_idx INT, PRIMARY KEY(movie_id, row))
 faces(movie_id, row INT, frame_row INT, x, y, w, h, det_score REAL,
@@ -330,6 +340,10 @@ clips(id PK, movie_id, start REAL, end REAL, mode, format, path, created_at)
 ```
 
 `transcript_segments` also gets an FTS5 virtual table, which is used for fast exact-phrase prefiltering before the fuzzy match.
+
+**Deduplication and `merged`.** When an ingest's SHA-256 matches a movie that is ready with the current `models.lock`, or still in progress, the new row becomes `status = merged` with `merged_into` set, its files are deleted, and the UI redirects to the existing movie. A failed or stale movie gives up its `sha256` instead, and the new one proceeds.
+
+**Liveness.** A running job heartbeats every 15 s. One with no heartbeat for `STALE_JOB_S` (default 300 s) is marked failed ("The worker stopped…"), so a crashed worker never leaves a job stuck as running.
 
 ### Job state machine
 
@@ -378,7 +392,7 @@ clip:    queued → cutting → ready | failed
 
 | Milestone | Scope |
 |---|---|
-| **M1 — Skeleton** | Compose stack, HTTP + archive.org ingest (incl. collection picker), proxy, `LocalIndexBackend` with transcript only, dialogue search, accurate MP4 clip. |
+| **M1 — Skeleton** (done) | Compose stack, HTTP + archive.org ingest (incl. collection picker), proxy, `LocalIndexBackend` with transcript only, dialogue search, accurate MP4 clip. |
 | **M2 — Colab + visual** | `ColabIndexBackend` (provision → detached run → poll → fetch → stop, reconciler, budget), shots + SigLIP, text search, timeline/heat-map UI. |
 | **M3 — Faces & images** | InsightFace stage, image/face search and fusion, face crop export. |
 | **M4 — Torrents & polish** | libtorrent ingest + proxy upload path, GIF and subtitle export, optional VLM reranker, eviction, token auth. |

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "whisper": {
+    "repo": "Systran/faster-whisper-tiny.en",
+    "revision": "0d3d19a32d3338f10357c0889762bd8d64bbdeba",
+    "beam_size": 1,
+    "vad_filter": true,
+    "max_no_speech_prob": 0.6
+  },
+  "sentence": {
+    "repo": "BAAI/bge-small-en-v1.5",
+    "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+    "onnx_file": "onnx/model.onnx",
+    "max_length": 256,
+    "pooling": "cls",
+    "dim": 384
+  }
+}
