@@ -23,6 +23,11 @@ x-backend: &backend
 services:
   redis:
     image: redis:7-alpine
+    # Persist the queues, so a restart doesn't drop queued jobs (the api also
+    # re-enqueues any it finds missing at startup).
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - fh-redis:/data
     restart: unless-stopped
 
   api:
@@ -59,3 +64,4 @@ services:
 
 volumes:
   fh-data:
+  fh-redis:

@@ -53,6 +53,30 @@ def enqueue(kind: str, job_id: str) -> None:
     threading.Thread(target=run, name=f"fh-{kind}-{job_id}", daemon=True).start()
 
 
+def requeue_lost(jobs: list[dict]) -> list[str]:
+    """Enqueue each ``queued`` job (``id``, ``kind``) that RQ no longer holds.
+
+    A Redis restart can drop its queues while the db still says ``queued``.
+    Enqueueing a job twice is harmless: ``Job.start`` runs it only once.
+    """
+    from redis import Redis
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job, JobStatus
+
+    conn = Redis.from_url(settings().redis_url)
+    live = {JobStatus.QUEUED, JobStatus.STARTED, JobStatus.SCHEDULED, JobStatus.DEFERRED}
+    lost = []
+    for j in jobs:
+        try:
+            if Job.fetch(f"fh-{j['id']}", connection=conn).get_status() in live:
+                continue
+        except NoSuchJobError:
+            pass
+        enqueue(j["kind"], j["id"])
+        lost.append(j["id"])
+    return lost
+
+
 def redis_ok() -> bool | None:
     s = settings()
     if not s.redis_url:

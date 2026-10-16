@@ -107,6 +107,15 @@ async def lifespan(app: FastAPI):
             jobs.reap_stale(conn)
             for j in db.rows(conn, "SELECT id, kind FROM jobs WHERE state='queued'"):
                 queue.enqueue(j["kind"], j["id"])
+    else:
+        with db.db() as conn:
+            queued = db.rows(conn, "SELECT id, kind FROM jobs WHERE state='queued'")
+        try:
+            lost = queue.requeue_lost(queued)
+            if lost:
+                log.warning("re-enqueued jobs missing from redis: %s", ", ".join(lost))
+        except Exception:  # redis down: the jobs wait for the next start
+            log.exception("couldn't check queued jobs against redis")
         if settings().index_backend == "colab":
             threading.Thread(target=_colab_forever, daemon=True).start()
     if os.environ.get("FH_SKIP_ENCODERS") != "1":

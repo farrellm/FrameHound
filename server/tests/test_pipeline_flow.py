@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-from framehound import db, index_backend, queue, tasks
+from framehound import config, db, index_backend, queue, tasks
 from framehound.media import ffprobe
 
 FAKE = [sys.executable, str(Path(__file__).with_name("fake_indexer.py"))]
@@ -179,3 +179,19 @@ def test_clip_validation(data_dir, client):
     # No index yet, so no transcript to burn in.
     assert client.post("/movies/d4/clips", json={"start": 0, "end": 2, "subs": True}
                        ).json()["code"] == "no_dialogue_index"
+
+
+def test_queued_jobs_lost_from_redis_are_requeued(monkeypatch):
+    import fakeredis
+    import redis
+    from rq import Queue
+
+    fake = fakeredis.FakeRedis()
+    monkeypatch.setattr(redis.Redis, "from_url", classmethod(lambda cls, *a, **k: fake))
+    monkeypatch.setenv("REDIS_URL", "redis://fake")
+    config.reset_settings()
+    queue.enqueue("ingest", "kept")
+    jobs_ = [{"id": "kept", "kind": "ingest"}, {"id": "lost", "kind": "clip"}]
+    assert queue.requeue_lost(jobs_) == ["lost"]
+    assert Queue("io", connection=fake).job_ids == ["fh-kept", "fh-lost"]
+    assert queue.requeue_lost(jobs_) == []
