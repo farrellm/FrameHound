@@ -450,11 +450,6 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
         </div>
         <div className="tc-row">
           <Timecode t={t} fps={fps} />
-          {zoomed && (
-            <button className="btn btn-text whole" onClick={whole}>
-              Whole movie
-            </button>
-          )}
         </div>
         <div className="strip-area">
           <Strip

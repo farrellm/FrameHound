@@ -107,6 +107,12 @@ export function Strip(p: Props) {
 
   return (
     <div className="table">
+      {/* Top-right of the strip (ui-design.md §4.3), outside the drag surface. */}
+      {p.zoomed && (
+        <button className="btn whole" onClick={p.onWhole}>
+          Whole movie
+        </button>
+      )}
       <div className="strip-wrap" ref={wrap}>
         <div
           className={`strip${p.dim ? " dim" : ""}`}

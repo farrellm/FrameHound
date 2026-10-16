@@ -806,11 +806,16 @@ legend {
   grid-column: 2;
 }
 
-.tc-row .whole {
-  grid-column: 3;
-  justify-self: end;
+/* Whole movie: a chip on the strip's top-right corner while zoomed. It sits above
+   the strip and its brackets, so a tap never starts a scrub. */
+.table .whole {
+  position: absolute;
+  z-index: 5;
+  top: 4px;
+  right: 8px;
   white-space: nowrap;
   font-size: var(--t-1);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
 }
 
 .movie-row .sub > * + * {
