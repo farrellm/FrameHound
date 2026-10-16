@@ -218,7 +218,10 @@ def _movie_out(conn, m: dict) -> dict:
         "capabilities": {"dialogue": "dialogue" in contents, "visual": "visual" in contents,
                          "faces": "faces" in contents},
         "models_ok": (m["models_lock_hash"] == load_lock().hash) if manifest else None,
-        "job": _job_out(active) if active else None,
+        # A running job's stages let the library show the same percentage as the
+        # movie page, which weighs stages within a group.
+        "job": _job_out(active, _stages(conn, active["id"]) if active["state"] == "running"
+                        else None) if active else None,
         "thumbs": _sample_thumbs(conn, m["id"]) if "visual" in contents else [],
     }
 

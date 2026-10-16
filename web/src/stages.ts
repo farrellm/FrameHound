@@ -63,6 +63,13 @@ export function groupStages(stages: Stage[]): Group[] {
   return out;
 }
 
+/** How far a running job is through its current group, as the movie page shows it. */
+export function activeGroupPct(stage: string | null, stages: Stage[] | undefined): number | null {
+  const def = GROUPS.find((g) => stage && stage in g.stages);
+  if (!def || !stages) return null;
+  return groupStages(stages).find((g) => g.label === def.label)?.pct ?? null;
+}
+
 /** The phrase a library row shows for a movie in progress: "Finding faces 62%". */
 export function activeLabel(stage: string | null, pct: number | null): string {
   const def = GROUPS.find((g) => stage && stage in g.stages);

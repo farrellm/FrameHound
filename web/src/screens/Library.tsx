@@ -7,7 +7,7 @@ import { Sheet } from "../components/Sheet";
 import { FindSheet } from "./FindSheet";
 import { fmtDuration } from "../format";
 import { linkProps, navigate } from "../router";
-import { activeLabel } from "../stages";
+import { activeGroupPct, activeLabel } from "../stages";
 
 /** The same rule the server uses to tell the three source types apart. */
 function parses(text: string): boolean {
@@ -111,7 +111,10 @@ function MovieRow({ movie: m }: { movie: Movie }) {
   else
     state = (
       <span className="num">
-        {activeLabel(m.job?.stage ?? null, m.job?.state === "running" ? m.job.pct : null)}
+        {activeLabel(
+          m.job?.stage ?? null,
+          m.job?.state === "running" ? activeGroupPct(m.job.stage, m.job.stages) : null,
+        )}
       </span>
     );
   return (
