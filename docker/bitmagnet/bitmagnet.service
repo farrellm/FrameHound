@@ -1,5 +1,6 @@
 [Unit]
-Description=Bitmagnet DHT crawler (docker compose)
+Description=Bitmagnet DHT crawler (docker compose, web UI served on the tailnet)
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
@@ -8,7 +9,13 @@ WorkingDirectory=%h/workspace/FrameHound/docker/bitmagnet
 # User units can't order against the system docker.service; wait for the daemon instead.
 ExecStartPre=/bin/sh -c 'until /usr/bin/docker info >/dev/null 2>&1; do sleep 2; done'
 ExecStart=/usr/bin/docker compose up -d --wait
+# Web UI on port 8450, tailnet-only (`serve`, never `funnel`): bitmagnet has
+# no auth, so the tailnet is the whole perimeter. 8449 is FrameHound's.
+ExecStartPost=/usr/bin/timeout 15 /usr/bin/tailscale serve --bg --https=8450 http://127.0.0.1:3333
 ExecStop=/usr/bin/docker compose down
+ExecStopPost=-/usr/bin/timeout 15 /usr/bin/tailscale serve --https=8450 off
+Restart=on-failure
+RestartSec=10
 TimeoutStartSec=300
 
 [Install]
