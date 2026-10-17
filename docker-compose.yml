@@ -12,7 +12,8 @@ x-backend: &backend
   environment:
     REDIS_URL: redis://redis:6379/0
   volumes:
-    - fh-data:/data
+    # FH_DATA_DIR (a host path) bind-mounts it instead of the named volume.
+    - ${FH_DATA_DIR:-fh-data}:/data
     # The colab CLI's sign-in and session state (run `colab usage` once on the host
     # to sign in). Shared with the host so `colab sessions` shows the same names.
     - ${COLAB_CONFIG_DIR:-~/.config/colab-cli}:/home/fh/.config/colab-cli
@@ -27,7 +28,7 @@ services:
     # re-enqueues any it finds missing at startup).
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - fh-redis:/data
+      - ${FH_REDIS_DIR:-fh-redis}:/data
     restart: unless-stopped
 
   api:

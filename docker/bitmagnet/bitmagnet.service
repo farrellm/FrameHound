@@ -8,6 +8,10 @@ RemainAfterExit=yes
 WorkingDirectory=%h/workspace/FrameHound/docker/bitmagnet
 # User units can't order against the system docker.service; wait for the daemon instead.
 ExecStartPre=/bin/sh -c 'until /usr/bin/docker info >/dev/null 2>&1; do sleep 2; done'
+# Wait for host-path volumes (e.g. on an external drive) to be mounted, so
+# docker doesn't create empty ones on the internal disk.
+EnvironmentFile=-%h/workspace/FrameHound/docker/bitmagnet/.env
+ExecStartPre=/bin/sh -c 'for d in "$$BITMAGNET_PG_DIR" "$$BITMAGNET_CONFIG_DIR"; do [ -z "$$d" ] || until [ -d "$$d" ]; do sleep 2; done; done'
 ExecStart=/usr/bin/docker compose up -d --wait
 # Web UI on port 8450, tailnet-only (`serve`, never `funnel`): bitmagnet has
 # no auth, so the tailnet is the whole perimeter. 8449 is FrameHound's.

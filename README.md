@@ -61,7 +61,8 @@ Indexing runs on Colab by default. Sign the `colab` CLI in on the host first
 (`colab usage` prompts the first time); compose mounts `~/.config/colab-cli`
 into the containers. Set `INDEX_BACKEND=local` to index on this machine.
 
-Movies, indexes, and model weights live in the `fh-data` volume. The first index
+Movies, indexes, and model weights live in the `fh-data` volume, or in a host
+directory set by `FH_DATA_DIR` in `.env` (see `.env.example`). The first index
 downloads Whisper large-v3 (about 3 GB). On a CPU, large-v3 takes roughly as long
 as the film, so for trying things out set `FH_MODELS_LOCK=models.tiny.lock` in
 `.env`. An index can only be searched by an api running the same lock.

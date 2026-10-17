@@ -10,7 +10,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       PGUSER: postgres
     volumes:
-      - bitmagnet_pg:/var/lib/postgresql/data
+      # BITMAGNET_PG_DIR / BITMAGNET_CONFIG_DIR (host paths) bind-mount these
+      # instead of the named volumes.
+      - ${BITMAGNET_PG_DIR:-bitmagnet_pg}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d bitmagnet"]
       interval: 10s
@@ -35,7 +37,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
     volumes:
-      - bitmagnet_config:/root/.config/bitmagnet
+      - ${BITMAGNET_CONFIG_DIR:-bitmagnet_config}:/root/.config/bitmagnet
     ports:
       # Web UI / GraphQL / Torznab (no auth, so localhost only)
       - "127.0.0.1:3333:3333"
