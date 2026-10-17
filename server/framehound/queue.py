@@ -29,7 +29,10 @@ def _timeout(kind: str) -> int:
     s = settings()
     if kind == "index":
         return max(s.index_timeout_s, s.local_index_timeout_s) + 900
-    return 6 * 3600 if kind == "ingest" else 3600
+    if kind == "ingest":
+        # A torrent may wait forever for peers; -1 is RQ's "no timeout".
+        return -1 if s.torrent_stall_s <= 0 else 6 * 3600
+    return 3600
 
 
 def enqueue(kind: str, job_id: str) -> None:

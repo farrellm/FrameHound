@@ -117,6 +117,17 @@ def test_no_stall_by_default(tmp_path, monkeypatch, seeder):
                          lambda *a: None, check_cancel)
 
 
+def test_ingest_has_no_rq_timeout_without_stall(monkeypatch):
+    # RQ's job timeout must not undo waiting forever for peers.
+    from framehound.queue import _timeout
+    monkeypatch.delenv("TORRENT_STALL_S", raising=False)
+    config.reset_settings()
+    assert _timeout("ingest") == -1
+    monkeypatch.setenv("TORRENT_STALL_S", "600")
+    config.reset_settings()
+    assert _timeout("ingest") == 6 * 3600
+
+
 def test_private_peers_are_blocked(tmp_path, monkeypatch, seeder):
     # Without the dev override the IP filter refuses the seeder on 127.0.0.1.
     monkeypatch.setenv("TORRENT_LISTEN", "127.0.0.1:0")
