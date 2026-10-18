@@ -6,6 +6,8 @@ heartbeats while a job runs, so the api can tell a job whose worker died.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 import threading
 import time
 import traceback
@@ -16,6 +18,8 @@ from .errors import Cancelled, FHError
 
 INGEST_STAGES = ["downloading", "probing", "transcoding_proxy"]
 TERMINAL = {"done", "failed", "cancelled"}
+
+log = logging.getLogger("framehound.jobs")
 
 
 def create(conn, movie_id: str, kind: str, stages: list[str], attempt: int = 0) -> str:
@@ -77,7 +81,13 @@ class Job:
         conn = db.connect()
         try:
             while not self._stop.wait(15):
-                conn.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (db.now(), self.id))
+                # A busy disk can hold the lock past busy_timeout; try again next beat
+                # rather than let the thread die and the job look lost.
+                try:
+                    conn.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?",
+                                 (db.now(), self.id))
+                except sqlite3.OperationalError as e:
+                    log.warning("job %s heartbeat skipped: %s", self.id, e)
         finally:
             conn.close()
 
@@ -89,6 +99,16 @@ class Job:
             return
         self._last_write[stage] = t
         pct = max(0.0, min(1.0, float(pct)))
+        try:
+            self._write_stage(stage, pct, eta_s, state, message)
+        except sqlite3.OperationalError as e:
+            # Losing one progress tick beats failing an hours-long download over it.
+            if force or state != "running":
+                raise
+            log.warning("job %s progress skipped: %s", self.id, e)
+
+    def _write_stage(self, stage: str, pct: float, eta_s: float | None, state: str,
+                     message: str | None) -> None:
         with db.tx(self.conn):
             self.conn.execute(
                 "INSERT INTO job_stages(job_id, stage, ord, state, pct, eta_s) "
