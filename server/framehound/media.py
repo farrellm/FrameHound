@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -12,6 +13,8 @@ from pathlib import Path
 from .config import settings
 from .errors import Cancelled, FHError
 
+log = logging.getLogger("framehound.media")
+
 VIDEO_EXTS = {".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".mpg", ".mpeg", ".ogv", ".ts"}
 FORMAT_ALLOW = {"mov", "mp4", "m4a", "3gp", "3g2", "mj2", "matroska", "webm", "avi", "mpeg",
                 "mpegts", "ogg", "flv", "asf"}
@@ -20,8 +23,9 @@ VIDEO_CODEC_ALLOW = {"h264", "hevc", "mpeg4", "mpeg2video", "mpeg1video", "vp8",
                      "flv1", "h263", "prores", "dvvideo"}
 
 
-def limited(cmd: list[str]) -> list[str]:
-    """Wrap ``cmd`` in prlimit (CPU, memory, file size).
+def limited(cmd: list[str], mem_mb: int | None = None) -> list[str]:
+    """Wrap ``cmd`` in prlimit (CPU, address space, file size). ``mem_mb``
+    overrides ``FFMPEG_MEM_MB``: CUDA reserves far more address space than it uses.
 
     prlimit rather than ``preexec_fn``, which can deadlock when jobs run in
     threads (the api's inline mode).
@@ -29,7 +33,7 @@ def limited(cmd: list[str]) -> list[str]:
     s = settings()
     if not shutil.which("prlimit"):
         return cmd
-    mem = s.ffmpeg_mem_mb * 1024 * 1024
+    mem = (mem_mb or s.ffmpeg_mem_mb) * 1024 * 1024
     return ["prlimit", f"--cpu={s.ffmpeg_cpu_s}", f"--as={mem}",
             f"--fsize={s.max_bytes * 2}", "--", *cmd]
 
@@ -93,13 +97,14 @@ def validate(p: Probe, size: int) -> None:
 
 
 def run_ffmpeg(args: list[str], duration_s: float, on_progress: Callable[[float], None],
-               check_cancel: Callable[[], None] = lambda: None, cwd: Path | None = None) -> None:
+               check_cancel: Callable[[], None] = lambda: None, cwd: Path | None = None,
+               mem_mb: int | None = None) -> None:
     """Run ffmpeg with ``-progress``; report fraction done; kill on cancel."""
     s = settings()
     threads = ["-threads", str(s.ffmpeg_threads)] if s.ffmpeg_threads else []
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-y",
            "-progress", "pipe:1", "-nostats", *threads, *args]
-    proc = subprocess.Popen(limited(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = subprocess.Popen(limited(cmd, mem_mb), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, cwd=cwd)
     assert proc.stdout is not None
     try:
@@ -123,15 +128,42 @@ def run_ffmpeg(args: list[str], duration_s: float, on_progress: Callable[[float]
                       detail=err[-800:])
 
 
+PROXY_AUDIO = ["-c:a", "aac", "-b:a", "96k", "-ac", "2", "-movflags", "+faststart"]
+
+
+def proxy_args_cpu(src: Path, out: Path) -> list[str]:
+    return ["-protocol_whitelist", "file", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
+            "-vf", "scale=-2:'min(720,ih)':flags=bicubic,format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", *PROXY_AUDIO, str(out)]
+
+
+def proxy_args_nvenc(src: Path, out: Path) -> list[str]:
+    """Decode, scale and encode on the GPU; cq 33 matches libx264's crf 26 in size
+    and SSIM on a GTX 1050."""
+    return ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
+            "-protocol_whitelist", "file", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
+            "-vf", "scale_cuda=-2:'min(720,ih)':format=yuv420p",
+            "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "33", "-b:v", "0",
+            "-profile:v", "high", *PROXY_AUDIO, str(out)]
+
+
 def transcode_proxy(src: Path, dst: Path, duration_s: float, on_progress, check_cancel) -> None:
+    """With ``TRANSCODE_HWACCEL=nvenc``, try the GPU first; anything it can't do
+    (no device, AV1, an odd pixel format) is redone from scratch with libx264."""
+    s = settings()
     tmp = dst.with_name(dst.stem + ".part.mp4")
-    run_ffmpeg(
-        ["-protocol_whitelist", "file", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
-         "-vf", "scale=-2:'min(720,ih)':flags=bicubic,format=yuv420p",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-         "-c:a", "aac", "-b:a", "96k", "-ac", "2", "-movflags", "+faststart", str(tmp)],
-        duration_s, on_progress, check_cancel,
-    )
+    if s.transcode_hwaccel == "nvenc":
+        try:
+            run_ffmpeg(proxy_args_nvenc(src, tmp), duration_s, on_progress, check_cancel,
+                       mem_mb=s.ffmpeg_gpu_mem_mb)
+            tmp.replace(dst)
+            return
+        except FHError as e:
+            if e.code != "ffmpeg_failed":
+                raise
+            log.warning("NVENC proxy failed, using libx264: %s", e.detail)
+            on_progress(0.0)
+    run_ffmpeg(proxy_args_cpu(src, tmp), duration_s, on_progress, check_cancel)
     tmp.replace(dst)
 
 

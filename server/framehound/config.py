@@ -53,6 +53,10 @@ class Settings:
     ffmpeg_cpu_s: int = field(default_factory=lambda: _int("FFMPEG_CPU_S", 6 * 3600))
     ffmpeg_mem_mb: int = field(default_factory=lambda: _int("FFMPEG_MEM_MB", 6144))
     ffmpeg_threads: int = field(default_factory=lambda: _int("FFMPEG_THREADS", 0))
+    # "nvenc" makes the proxy on an NVIDIA GPU (docker-compose.gpu.yml), falling
+    # back to libx264; CUDA needs a larger address-space limit than FFMPEG_MEM_MB.
+    transcode_hwaccel: str = field(default_factory=lambda: _env("TRANSCODE_HWACCEL", "none"))
+    ffmpeg_gpu_mem_mb: int = field(default_factory=lambda: _int("FFMPEG_GPU_MEM_MB", 16384))
     index_zstd_level: int = field(default_factory=lambda: _int("INDEX_ZSTD_LEVEL", 3))
     stale_job_s: int = field(default_factory=lambda: _int("STALE_JOB_S", 300))
     # Colab (design.md §5, §10).

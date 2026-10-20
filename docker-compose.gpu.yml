@@ -1,0 +1,21 @@
+# Makes proxies on an NVIDIA GPU (NVDEC + NVENC) instead of the CPU; a source
+# the GPU can't handle (e.g. AV1 on older cards) falls back to libx264. Needs
+# the NVIDIA Container Toolkit on the host:
+#   sudo pacman -S nvidia-container-toolkit   # or your distro's package
+#   sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+# Then turn it on with this line in .env (add any other overrides too):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+
+services:
+  worker-io:
+    environment:
+      TRANSCODE_HWACCEL: nvenc
+      # "video" mounts the driver's NVENC/NVDEC libraries into the container.
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, video]

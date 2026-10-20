@@ -139,7 +139,7 @@ All models are pinned in one `models.lock` file (model id, revision or commit ha
 
 - `ffprobe -show_format -show_streams` must find a video stream and a duration of at most `MAX_DURATION`. The file must be no larger than `MAX_BYTES`.
 - **Deduplication.** The host computes the SHA-256 of `source.*` as the movie's content key. If a ready index with the same key and the same `models.lock` hash already exists, the job skips straight to *ready*.
-- **Proxy transcode.** `ffmpeg -i source -vf scale=-2:720 -c:v libx264 -preset veryfast -crf 26 -c:a aac -b:a 96k -movflags +faststart proxy.mp4`. A 2-hour film comes out at roughly 1–1.5 GB. The proxy serves two purposes: browser playback, and the upload to Colab when one is needed (see below).
+- **Proxy transcode.** `ffmpeg -i source -vf scale=-2:720 -c:v libx264 -preset veryfast -crf 26 -c:a aac -b:a 96k -movflags +faststart proxy.mp4`. A 2-hour film comes out at roughly 1–1.5 GB. The proxy serves two purposes: browser playback, and the upload to Colab when one is needed (see below). With `TRANSCODE_HWACCEL=nvenc` (`docker-compose.gpu.yml`) it is decoded, scaled and encoded on an NVIDIA GPU instead (`scale_cuda`, `h264_nvenc -cq 33`, about the same size and quality); if that fails for any reason, the proxy is redone with libx264.
 
 ### Getting media onto the Colab VM
 
