@@ -8,6 +8,7 @@
   --ink: #1c2533;
   --fog: #5b6878;
   --marker: #f2b705;
+  --red-marker: #ff5c7a;
   --splice: #23688a;
   --danger: #b3261e;
   /* Derived: empty film frames in the gate, and the scrim behind sheets. */
@@ -727,6 +728,10 @@ legend {
   fill: var(--marker);
   transform-box: fill-box;
   transform-origin: bottom;
+}
+
+.heat rect.top {
+  fill: var(--red-marker);
 }
 
 .heat.sweep rect {

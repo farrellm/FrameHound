@@ -38,6 +38,7 @@ That strip is the one bold element. Everything around it (lists, sheets, forms) 
 | `--ink` | `#1C2533` | `#F7FAFB` | Body text. |
 | `--fog` | `#5B6878` | `#9AA7B6` | Secondary text: durations, timecode ranges, captions. |
 | `--marker` | `#F2B705` | `#F2B705` | China marker: heat marks, in/out brackets, primary button fill. |
+| `--red-marker` | `#FF5C7A` | `#FF5C7A` | Red china marker: heat marks over the listed matches. Pushed toward magenta so it stays distinct from `--marker` under red–green colour blindness, not only by lightness. On the strip only (5.2:1 on Emulsion). |
 | `--splice` | `#23688A` | `#6BB8D8` | Links, the selected candidate, focus rings. |
 | `--danger` | `#B3261E` | `#F2867E` | Destructive actions (Cancel indexing, Delete movie) and error text. |
 
@@ -105,6 +106,7 @@ With `prefers-reduced-motion: reduce`, all of these are instant cuts. Nothing lo
 | splice on lightbox (light) | 5.25 | 4.5 ✓ (darkened from `#2E7DA1`, which was 3.9) |
 | emulsion on marker (button text) | 8.5 | 4.5 ✓ |
 | marker on emulsion (heat marks, brackets) | 8.5 | 3.0 ✓ |
+| red-marker on emulsion (match heat marks) | 5.2 | 3.0 ✓ |
 | ink on lightbox (dark) | 16.3 | 4.5 ✓ |
 | fog on diffuser (dark) | 6.1 | 4.5 ✓ |
 | splice on diffuser (dark) | 6.7 | 4.5 ✓ |
@@ -367,7 +369,7 @@ The three modes map to the API's `type`:
 
 - **Body.** Emulsion, with sprocket holes along the top and bottom edges in `--table` color. Shot thumbnails sit in the gate at their real positions in time.
 - **Heat.**
-  - Grease-pencil marks in `--marker` sit under the gate. Each mark's **height** (0–100% of the band) is the smoothed score z(t) from the API's `heat` series.
+  - Grease-pencil marks in `--marker` sit under the gate. Each mark's **height** (0–100% of the band) is the smoothed score z(t) from the API's `heat` series. Marks inside a listed match (the top 10) are drawn in `--red-marker`, so the strip shows which bright spots made the list.
   - Above threshold, marks thicken into a solid bar. Height and thickness carry the information, so it never depends on color.
   - The marks draw in once per search (§2, Motion).
 - **Candidate span and handles.** The selected candidate shows as a span with china-marker brackets `▌ ▐` (in/out), filled at 35% marker over the frames.

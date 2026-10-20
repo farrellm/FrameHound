@@ -458,6 +458,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             t={t}
             view={view}
             heat={result?.heat ?? null}
+            matches={result?.candidates ?? []}
             threshold={result?.heat_threshold ?? 3}
             sweepKey={sweepKey}
             dim={searching}
