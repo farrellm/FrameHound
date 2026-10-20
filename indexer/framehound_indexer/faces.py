@@ -165,10 +165,11 @@ class FaceEncoder:
     """Finds faces in RGB images (HxWx3 uint8) and turns them into identities."""
 
     def __init__(self, lock: ModelsLock | None = None, device: str = "cpu",
-                 threads: int | None = None):
+                 threads: int | None = None, arena: bool = True):
         self.cfg = (lock or load_lock()).faces
         self.device = device
         self.threads = threads
+        self.arena = arena
         self.dim = int(self.cfg["dim"])
         self._det = None
         self._rec = None
@@ -177,15 +178,27 @@ class FaceEncoder:
     def _session(self, file: str):
         import onnxruntime as ort
 
-        from .encoders import preload_cuda, providers, snapshot
+        from .encoders import preload_cuda, providers, session_options, snapshot
 
         root = snapshot(self.cfg["repo"], self.cfg["revision"], [file])
-        opts = ort.SessionOptions()
-        if self.threads:
-            opts.intra_op_num_threads = self.threads
+        opts = session_options(self.threads, self.arena)
         if self.device == "cuda":
             preload_cuda()
         return ort.InferenceSession(str(root / file), opts, providers=providers(self.device))
+
+    def prefetch(self) -> None:
+        """Download the models without loading them."""
+        from .encoders import snapshot
+
+        snapshot(self.cfg["repo"], self.cfg["revision"],
+                 [self.cfg["detector_file"], self.cfg["recognizer_file"]])
+
+    def unload(self) -> bool:
+        """Drop both sessions (they reload on next use); True if they were loaded."""
+        with self._lock:
+            dropped = self._det is not None
+            self._det = self._rec = None
+            return dropped
 
     def sessions(self):
         with self._lock:

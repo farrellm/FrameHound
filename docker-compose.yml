@@ -33,6 +33,10 @@ services:
 
   api:
     <<: *backend
+    # A hard cap, swap included, so it can't push the host into swap: a search
+    # model is a few GB once loaded. Restarts if it ever hits the limit.
+    mem_limit: ${FH_API_MEM:-6g}
+    memswap_limit: ${FH_API_MEM:-6g}
 
   worker-io:
     <<: *backend

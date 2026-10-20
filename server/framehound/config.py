@@ -44,6 +44,9 @@ class Settings:
     # lock's match similarity, plus FACE_SCALE per unit of similarity above it.
     face_bonus: float = field(default_factory=lambda: _float("FACE_BONUS", 2.0))
     face_scale: float = field(default_factory=lambda: _float("FACE_SCALE", 20.0))
+    # Unload the visual and face models after this long unused (they reload on the
+    # next query that needs them, in a few seconds); 0 keeps them loaded.
+    encoder_idle_s: float = field(default_factory=lambda: _float("ENCODER_IDLE_S", 900))
     max_query_image_mb: float = field(default_factory=lambda: _float("MAX_QUERY_IMAGE_MB", 15))
     # Dev/test only: lets downloads reach private addresses (e.g. a local http.server).
     allow_private_urls: bool = field(default_factory=lambda: _bool("FH_ALLOW_PRIVATE_URLS", False))

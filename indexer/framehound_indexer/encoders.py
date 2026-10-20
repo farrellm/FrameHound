@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -59,7 +60,8 @@ def materialize(root: Path, files: list[str]) -> Path:
 class SentenceEncoder:
     """bge-small-en-v1.5: CLS pooling, L2-normalized, 384-d."""
 
-    def __init__(self, lock: ModelsLock | None = None, threads: int | None = None):
+    def __init__(self, lock: ModelsLock | None = None, threads: int | None = None,
+                 arena: bool = True):
         import onnxruntime as ort
         from tokenizers import Tokenizer
 
@@ -72,9 +74,7 @@ class SentenceEncoder:
         self.tokenizer = Tokenizer.from_file(str(root / "tokenizer.json"))
         self.tokenizer.enable_truncation(max_length=cfg["max_length"])
         self.tokenizer.enable_padding()
-        opts = ort.SessionOptions()
-        if threads:
-            opts.intra_op_num_threads = threads
+        opts = session_options(threads, arena)
         self.session = ort.InferenceSession(
             str(root / cfg["onnx_file"]), opts, providers=["CPUExecutionProvider"]
         )
@@ -110,7 +110,7 @@ def sentence_encoder() -> SentenceEncoder:
     global _sentence
     with _sentence_lock:
         if _sentence is None:
-            _sentence = SentenceEncoder()
+            _sentence = SentenceEncoder(arena=False)
         return _sentence
 
 
@@ -131,6 +131,19 @@ def providers(device: str = "cpu") -> list[str]:
     if device == "cuda" and "CUDAExecutionProvider" in ort.get_available_providers():
         return ["CUDAExecutionProvider", "CPUExecutionProvider"]
     return ["CPUExecutionProvider"]
+
+
+def session_options(threads: int | None = None, arena: bool = True):
+    """ONNX Runtime options. ``arena=False`` frees activations after each run
+    instead of keeping a pool that only grows (worth it for the api's one-off
+    queries, not for batch indexing)."""
+    import onnxruntime as ort
+
+    opts = ort.SessionOptions()
+    if threads:
+        opts.intra_op_num_threads = threads
+    opts.enable_cpu_mem_arena = arena
+    return opts
 
 
 def preload_cuda() -> None:
@@ -188,10 +201,11 @@ class VisualEncoder:
     """
 
     def __init__(self, lock: ModelsLock | None = None, device: str = "cpu",
-                 threads: int | None = None):
+                 threads: int | None = None, arena: bool = True):
         self.cfg = (lock or load_lock()).visual
         self.device = device
         self.threads = threads
+        self.arena = arena
         self.dim = int(self.cfg["dim"])
         self.size = int(self.cfg["image_size"])
         self._text = None
@@ -212,12 +226,26 @@ class VisualEncoder:
         import onnxruntime as ort
 
         root = materialize(self._root([file]), [file, file + "_data"])
-        opts = ort.SessionOptions()
-        if self.threads:
-            opts.intra_op_num_threads = self.threads
+        opts = session_options(self.threads, self.arena)
         if self.device == "cuda":
             preload_cuda()
         return ort.InferenceSession(str(root / file), opts, providers=providers(self.device))
+
+    def prefetch(self) -> None:
+        """Download both towers without loading them."""
+        for f in (self.cfg["text_file"], self.cfg["vision_file"]):
+            materialize(self._root([f]), [f, f + "_data"])
+
+    def unload(self, text: bool = False, vision: bool = False) -> bool:
+        """Drop the ONNX towers asked for (they reload on next use); True if any was
+        loaded. A query already holding one finishes with it."""
+        with self._lock:
+            dropped = (text and self._text is not None) or (vision and self._vision is not None)
+            if text:
+                self._text = None
+            if vision:
+                self._vision = None
+            return dropped
 
     def vision_session(self):
         with self._lock:
@@ -341,18 +369,32 @@ def visual_encoder() -> VisualEncoder:
     global _visual
     with _visual_lock:
         if _visual is None:
-            _visual = VisualEncoder()
+            _visual = VisualEncoder(arena=False)
         return _visual
+
+
+# When the api last used each lazily loaded model, for unload_idle.
+_used: dict[str, float] = {}
+
+
+def _touch(name: str) -> None:
+    _used[name] = time.monotonic()
 
 
 def encode_text(q: str) -> np.ndarray:
     """A prompt ensemble: embed each template, average, renormalize (1-d vector)."""
-    vecs = visual_encoder().encode_texts([p.format(q=q) for p in PROMPTS])
+    try:
+        vecs = visual_encoder().encode_texts([p.format(q=q) for p in PROMPTS])
+    finally:
+        _touch("text")
     return _normalize(vecs.mean(axis=0, keepdims=True))[0]
 
 
 def encode_image(image) -> np.ndarray:
-    return visual_encoder().encode_images([image])[0]
+    try:
+        return visual_encoder().encode_images([image])[0]
+    finally:
+        _touch("vision")
 
 
 _face = None
@@ -365,13 +407,20 @@ def face_encoder():
     global _face
     with _face_lock:
         if _face is None:
-            _face = FaceEncoder()
+            _face = FaceEncoder(arena=False)
         return _face
 
 
 def encode_face(image) -> tuple[np.ndarray, tuple[float, float, float, float]] | None:
     """The largest face in a picture: its ArcFace identity and its box as fractions of
     the picture (x, y, w, h), or None when no face is found."""
+    try:
+        return _encode_face(image)
+    finally:
+        _touch("face")
+
+
+def _encode_face(image):
     from PIL import Image
 
     from .faces import align, largest, normalized_box
@@ -385,3 +434,33 @@ def encode_face(image) -> tuple[np.ndarray, tuple[float, float, float, float]] |
     vec = enc.embed([align(image, face)])[0]
     h, w = image.shape[:2]
     return vec, normalized_box(face, w, h)
+
+
+def unload_idle(idle_s: float) -> list[str]:
+    """Drop the api's models ("text", "vision", "face") unused for ``idle_s``; each
+    reloads on the next query that needs it. Returns the names dropped."""
+    now = time.monotonic()
+    idle = {n for n, t in _used.items() if now - t >= idle_s}
+    dropped = []
+    if _visual is not None:
+        for name in ("text", "vision"):
+            if name in idle and _visual.unload(**{name: True}):
+                dropped.append(name)
+    if "face" in idle and _face is not None and _face.unload():
+        dropped.append("face")
+    if dropped:
+        _trim()
+    return dropped
+
+
+def _trim() -> None:
+    """Hand freed memory back to the OS: glibc keeps freed blocks for reuse, so RSS
+    wouldn't drop otherwise."""
+    import ctypes
+    import gc
+
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # not glibc
+        pass

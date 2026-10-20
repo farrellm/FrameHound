@@ -31,8 +31,10 @@ from .torrent import TORRENT_FILE
 log = logging.getLogger("framehound.api")
 
 _encoder_state = {"state": "loading", "error": None}
-_visual_state = {"state": "loading", "error": None}
-_face_state = {"state": "loading", "error": None}
+# SigLIP and the face models take GBs once loaded, so they load on the first query
+# that needs them ("idle" until then); startup only downloads them.
+_visual_state = {"state": "idle", "error": None}
+_face_state = {"state": "idle", "error": None}
 
 
 def _warm_encoders() -> None:
@@ -44,23 +46,50 @@ def _warm_encoders() -> None:
     except Exception as e:  # search degrades to lexical-only dialogue matching
         log.exception("sentence encoder failed to load")
         _encoder_state.update(state="error", error=f"{type(e).__name__}: {e}")
-    try:
-        from framehound_indexer.encoders import visual_encoder
+    from framehound_indexer.encoders import face_encoder, visual_encoder
 
-        visual_encoder().text_session()
-        visual_encoder().vision_session()
-        _visual_state["state"] = "ready"
-    except Exception as e:  # Describe it and Show a picture are unavailable until it loads
-        log.exception("visual encoder failed to load")
-        _visual_state.update(state="error", error=f"{type(e).__name__}: {e}")
-    try:
-        from framehound_indexer.encoders import face_encoder
+    for name, state, encoder in (("visual", _visual_state, visual_encoder),
+                                 ("face", _face_state, face_encoder)):
+        try:
+            encoder().prefetch()
+        except Exception as e:  # retried when a query first loads it
+            log.exception("%s encoder failed to download", name)
+            state.update(state="error", error=f"{type(e).__name__}: {e}")
 
-        face_encoder().sessions()
-        _face_state["state"] = "ready"
-    except Exception as e:  # Show a picture degrades to looks only
-        log.exception("face encoder failed to load")
-        _face_state.update(state="error", error=f"{type(e).__name__}: {e}")
+
+def _encode(state: dict, name: str, fn, *args):
+    """Run a lazily loaded encoder, recording whether its model loaded. Raises on
+    failure; a later query tries again."""
+    try:
+        out = fn(*args)
+    except Exception as e:
+        log.exception("%s encoder failed", name)
+        state.update(state="error", error=f"{type(e).__name__}: {e}")
+        raise
+    state.update(state="ready", error=None)
+    return out
+
+
+def _unload_idle_forever() -> None:
+    """Free the lazily loaded models after ENCODER_IDLE_S without a query using them."""
+    from framehound_indexer.encoders import unload_idle
+
+    while True:
+        time.sleep(60)
+        idle_s = settings().encoder_idle_s
+        if idle_s <= 0:
+            continue
+        try:
+            dropped = unload_idle(idle_s)
+        except Exception:
+            log.exception("unloading idle encoders failed")
+            continue
+        if dropped:
+            log.info("unloaded idle encoders: %s", ", ".join(dropped))
+        if "face" in dropped and _face_state["state"] == "ready":
+            _face_state["state"] = "idle"
+        if {"text", "vision"} & set(dropped) and _visual_state["state"] == "ready":
+            _visual_state["state"] = "idle"
 
 
 def _colab_forever() -> None:
@@ -120,6 +149,7 @@ async def lifespan(app: FastAPI):
             threading.Thread(target=_colab_forever, daemon=True).start()
     if os.environ.get("FH_SKIP_ENCODERS") != "1":
         threading.Thread(target=_warm_encoders, daemon=True).start()
+        threading.Thread(target=_unload_idle_forever, daemon=True).start()
     threading.Thread(target=_gc_clips_forever, daemon=True).start()
     yield
 
@@ -625,30 +655,35 @@ def _search(movie_id: str, body: SearchBody, image: bytes | None = None) -> dict
     face_found = None
     image_sha = None
     if body.type in ("text", "image") and "visual" in contents:
-        if _visual_state["state"] == "error":
-            raise FHError("encoder_unavailable", "Searching by what's on screen is "
-                          "unavailable: the visual model didn't load on the server.",
-                          detail=_visual_state["error"], status=503)
+        from framehound_indexer.encoders import encode_face, encode_image, encode_text
+
+        def visual_vec(fn, arg):
+            try:
+                return _encode(_visual_state, "visual", fn, arg)
+            except Exception:  # noqa: BLE001 (_encode logged it)
+                raise FHError("encoder_unavailable", "Searching by what's on screen is "
+                              "unavailable: the visual model didn't load on the server.",
+                              detail=_visual_state["error"], status=503) from None
+
         vidx = visual.visual_index(movie_id, index_dir)
         fidx = faces.face_index(movie_id, index_dir, vidx.times.size) \
             if "faces" in contents else None
         if body.type == "text":
-            from framehound_indexer.encoders import encode_text
-
-            results.append(vidx.search(encode_text(q), duration, top_k, bins, s.z_min,
-                                       faces=fidx))
+            results.append(vidx.search(visual_vec(encode_text, q), duration, top_k, bins,
+                                       s.z_min, faces=fidx))
         else:
-            from framehound_indexer.encoders import encode_face, encode_image
-
             image_sha = hashlib.sha256(image or b"").hexdigest()
             im = _open_image(image or b"")
             face_vec = None
-            if fidx is not None and _face_state["state"] != "error":
-                found = encode_face(im)
-                face_found = found is not None
-                face_vec = found[0] if found else None
+            if fidx is not None:
+                try:
+                    found = _encode(_face_state, "face", encode_face, im)
+                    face_found = found is not None
+                    face_vec = found[0] if found else None
+                except Exception:  # noqa: BLE001, S110 (logged; degrade to looks only)
+                    pass
             results.append(vidx.search_image(
-                encode_image(im), face_vec, duration, top_k, bins, s.z_min, fidx,
+                visual_vec(encode_image, im), face_vec, duration, top_k, bins, s.z_min, fidx,
                 match=float(load_lock().faces["match"]), bonus=s.face_bonus,
                 scale=s.face_scale))
     if use_dialogue and "dialogue" in contents:
