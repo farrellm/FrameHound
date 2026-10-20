@@ -26,6 +26,10 @@ def _bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", "/data")))
+    # Movie files (source, proxy, partial torrents, clips): big and read in order, so
+    # they can live on a slower disk than DATA_DIR, which every search reads.
+    media_dir: Path = field(default_factory=lambda: Path(_env("MEDIA_DIR", "")
+                                                         or _env("DATA_DIR", "/data")))
     # Empty REDIS_URL runs jobs in background threads inside the api (dev mode).
     redis_url: str = field(default_factory=lambda: _env("REDIS_URL", ""))
     index_backend: str = field(default_factory=lambda: _env("INDEX_BACKEND", "colab"))
@@ -103,7 +107,16 @@ class Settings:
         return self.data_dir / "framehound.sqlite"
 
     def movie_dir(self, movie_id: str) -> Path:
+        """The movie's index (searched on every query)."""
         return self.data_dir / "movies" / movie_id
+
+    def media_movie_dir(self, movie_id: str) -> Path:
+        """The movie's files: source, ``proxy.mp4``, partial torrents, clips."""
+        return self.media_dir / "movies" / movie_id
+
+    def movie_dirs(self, movie_id: str) -> list[Path]:
+        """Both, once each when they're the same directory."""
+        return list(dict.fromkeys([self.movie_dir(movie_id), self.media_movie_dir(movie_id)]))
 
 
 _settings: Settings | None = None

@@ -233,7 +233,7 @@ def _not_found(what: str = "movie") -> FHError:
 # serialization ----------------------------------------------------------------
 
 def _movie_out(conn, m: dict) -> dict:
-    mdir = settings().movie_dir(m["id"])
+    mdir = settings().media_movie_dir(m["id"])
     active = db.row(conn, "SELECT * FROM jobs WHERE movie_id=? AND kind IN ('ingest','index') "
                     "ORDER BY created_at DESC LIMIT 1", m["id"])
     manifest = _manifest(m["id"])
@@ -304,7 +304,8 @@ def health(request: Request):
     s = settings()
     if s.token and not _authorized(request, s.token):
         return {"ok": True, "auth_required": True, "signed_in": False}
-    du = shutil.disk_usage(s.data_dir) if s.data_dir.exists() else None
+    # Where downloads land, so the space that runs out first.
+    du = shutil.disk_usage(s.media_dir) if s.media_dir.exists() else None
     return {
         "ok": True,
         "redis": queue.redis_ok(),
@@ -418,7 +419,7 @@ def _create_movie(res, torrent: bytes | None = None):
              res.expected_size, "ingesting", db.now(), db.now()),
         )
         if torrent is not None:
-            mdir = settings().movie_dir(movie_id)
+            mdir = settings().media_movie_dir(movie_id)
             mdir.mkdir(parents=True, exist_ok=True)
             (mdir / TORRENT_FILE).write_bytes(torrent)
         job_id = tasks.start_ingest(conn, movie_id)
@@ -475,7 +476,8 @@ def delete_movie(movie_id: str):
     dialogue.evict(movie_id)
     visual.evict(movie_id)
     faces.evict(movie_id)
-    shutil.rmtree(settings().movie_dir(movie_id), ignore_errors=True)
+    for d in settings().movie_dirs(movie_id):
+        shutil.rmtree(d, ignore_errors=True)
 
 
 @app.post("/movies/{movie_id}/retry", status_code=202)
@@ -485,7 +487,7 @@ def retry_movie(movie_id: str):
         m = _get_movie(conn, movie_id)
         if m["status"] in tasks.ACTIVE:
             raise FHError("busy", "This movie is already being worked on.", status=409)
-        mdir = settings().movie_dir(movie_id)
+        mdir = settings().media_movie_dir(movie_id)
         ready_media = m["sha256"] and (mdir / (m["source_file"] or "")).exists() \
             and (mdir / "proxy.mp4").exists()
         if ready_media:
@@ -770,7 +772,7 @@ def make_clip(movie_id: str, body: ClipBody):
         m = _get_movie(conn, movie_id)
         if m["duration_s"] and body.end > m["duration_s"] + 0.5:
             raise FHError("bad_span", "The out point is past the end of the movie.")
-        if not (s.movie_dir(movie_id) / (m["source_file"] or "")).exists():
+        if not (s.media_movie_dir(movie_id) / (m["source_file"] or "")).exists():
             raise FHError("source_missing", "The movie file is gone. Re-download it to clip.",
                           status=409)
         job_id = jobs.create(conn, movie_id, "clip", ["cutting"])
@@ -827,7 +829,7 @@ def clip_file(clip_id: str):
 def proxy(movie_id: str):
     if not re.fullmatch(r"[a-z0-9]{1,32}", movie_id):
         raise _not_found()
-    path = settings().movie_dir(movie_id) / "proxy.mp4"
+    path = settings().media_movie_dir(movie_id) / "proxy.mp4"
     if not path.exists():
         raise FHError("not_ready", "This movie isn't ready to play yet.", status=404)
     return FileResponse(path, media_type="video/mp4")

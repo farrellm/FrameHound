@@ -18,7 +18,7 @@ ExecStartPre=/bin/sh -c 'until /usr/bin/docker info >/dev/null 2>&1; do sleep 2;
 # Wait for host-path volumes (e.g. on an external drive) to be mounted, so
 # docker doesn't create empty ones on the internal disk.
 EnvironmentFile=-%h/workspace/FrameHound/.env
-ExecStartPre=/bin/sh -c 'for d in "$$FH_DATA_DIR" "$$FH_REDIS_DIR"; do [ -z "$$d" ] || until [ -d "$$d" ]; do sleep 2; done; done'
+ExecStartPre=/bin/sh -c 'for d in "$$FH_DATA_DIR" "$$FH_MEDIA_DIR" "$$FH_REDIS_DIR"; do [ -z "$$d" ] || until [ -d "$$d" ]; do sleep 2; done; done'
 # No --build: `make deploy` builds the images, so a boot never rebuilds.
 # --wait blocks until every service is running (none has a healthcheck).
 ExecStart=/usr/bin/docker compose up -d --wait

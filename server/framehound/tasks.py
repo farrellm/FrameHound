@@ -63,7 +63,7 @@ def run_ingest(job_id: str) -> None:
         if not job.start():
             return
         m = _movie(conn, mid)
-        mdir = settings().movie_dir(mid)
+        mdir = settings().media_movie_dir(mid)
         mdir.mkdir(parents=True, exist_ok=True)
         # A movie whose source was evicted keeps its index: re-download, check it's
         # the same file, and return to ready without indexing again.
@@ -121,7 +121,8 @@ def run_ingest(job_id: str) -> None:
             if target:
                 _set_movie(conn, mid, status="merged", merged_into=target)
                 job.finish(message=f"merged into {target}")
-                shutil.rmtree(mdir, ignore_errors=True)
+                for d in settings().movie_dirs(mid):
+                    shutil.rmtree(d, ignore_errors=True)
                 return
         _set_movie(conn, mid, sha256=sha, duration_s=probe.duration_s, width=probe.width,
                    height=probe.height, fps=probe.fps, bytes=size)
@@ -210,7 +211,7 @@ def run_index(job_id: str) -> None:
         else:
             job.set(gpu=backend.gpu or "local")
         m = _movie(conn, mid)
-        mdir = s.movie_dir(mid)
+        mdir = s.media_movie_dir(mid)
         src = mdir / (m["source_file"] or "")
         if not src.exists():
             raise FHError("source_missing", "The movie file is gone. Re-download it to index.")
@@ -395,7 +396,7 @@ def run_clip(job_id: str) -> None:
         if clip is None:
             raise FHError("not_found", "This clip was removed.")
         m = _movie(conn, clip["movie_id"])
-        mdir = settings().movie_dir(m["id"])
+        mdir = settings().media_movie_dir(m["id"])
         src = mdir / (m["source_file"] or "")
         if not src.exists():
             raise FHError("source_missing", "The movie file is gone. Re-download it to clip.")

@@ -43,7 +43,7 @@ def make_video(path: Path, seconds: int = 4) -> None:
 
 
 def add_local_movie(data_dir: Path, mid: str = "mv1") -> str:
-    mdir = data_dir / "movies" / mid
+    mdir = config.settings().media_movie_dir(mid)  # data_dir/movies/mid unless split
     mdir.mkdir(parents=True)
     make_video(mdir / "source.mp4")
     with db.db() as conn:

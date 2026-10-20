@@ -1,4 +1,5 @@
-"""Disk quota: LRU eviction by ``last_accessed_at`` once movies/ passes MAX_DATA_GB.
+"""Disk quota: LRU eviction by ``last_accessed_at`` once movies/ (under DATA_DIR and
+MEDIA_DIR together) passes MAX_DATA_GB.
 
 Cheapest loss first (design.md §10):
 
@@ -41,7 +42,9 @@ def tree_bytes(path: Path) -> int:
 
 
 def usage() -> int:
-    return tree_bytes(settings().data_dir / "movies")
+    s = settings()
+    roots = dict.fromkeys([s.data_dir / "movies", s.media_dir / "movies"])
+    return sum(tree_bytes(r) for r in roots)
 
 
 def enforce_quota(protect: set[str] | frozenset[str] = frozenset(), need: int = 0) -> list[str]:
@@ -106,7 +109,7 @@ def _clips(conn, m: dict) -> int:
 def _source(conn, m: dict) -> int:
     if m["status"] != "ready" or not m["source_file"]:
         return 0
-    src = settings().movie_dir(m["id"]) / m["source_file"]
+    src = settings().media_movie_dir(m["id"]) / m["source_file"]
     if not src.exists():
         return 0
     size = src.stat().st_size
@@ -115,11 +118,11 @@ def _source(conn, m: dict) -> int:
 
 
 def _all(conn, m: dict) -> int:
-    mdir = settings().movie_dir(m["id"])
-    if not mdir.exists():
+    dirs = [d for d in settings().movie_dirs(m["id"]) if d.exists()]
+    if not dirs:
         return 0
     size = 0
-    for child in mdir.iterdir():
+    for child in (c for d in dirs for c in d.iterdir()):
         if child.name == TORRENT_FILE:  # small, and needed to download it again
             continue
         if child.is_dir():

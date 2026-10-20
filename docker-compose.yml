@@ -14,6 +14,8 @@ x-backend: &backend
   volumes:
     # FH_DATA_DIR (a host path) bind-mounts it instead of the named volume.
     - ${FH_DATA_DIR:-fh-data}:/data
+    # Movie files, when MEDIA_DIR=/library splits them off /data (.env.example).
+    - ${FH_MEDIA_DIR:-fh-media}:/library
     # The colab CLI's sign-in and session state (run `colab usage` once on the host
     # to sign in). Shared with the host so `colab sessions` shows the same names.
     - ${COLAB_CONFIG_DIR:-~/.config/colab-cli}:/home/fh/.config/colab-cli
@@ -69,4 +71,5 @@ services:
 
 volumes:
   fh-data:
+  fh-media:
   fh-redis:
