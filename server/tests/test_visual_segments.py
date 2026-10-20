@@ -1,6 +1,6 @@
 import numpy as np
 from framehound.search.heat import robust_z
-from framehound.search.visual import moving_max, segments
+from framehound.search.visual import HEAT_FLOOR, VisualIndex, moving_max, segments
 
 HZ = 2.0
 
@@ -73,3 +73,16 @@ def test_short_run_never_collapses_onto_one_boundary():
     segs, _, _ = run(s, shots=[(0, 89.95), (89.95, 1500)])
     a, b = segs[0].core
     assert a <= 89.5 and b >= 90.0 and b > a
+
+
+def test_heat_drops_frames_below_the_floor():
+    # Only the bump and its smoothing reach the strip; background frames (|z| <= 2,
+    # below HEAT_FLOOR * 3) stay blank instead of covering it in faint marks.
+    s = series(3000, [(100, 104, 0.30)])
+    vi = VisualIndex.__new__(VisualIndex)
+    vi.movie_id, vi.times, vi.shots, vi.shot_ids = "m", np.arange(len(s)) / HZ, [], []
+    r = vi.rank(robust_z(s), len(s) / HZ, top_k=5, heat_bins=1500, z_min=3.0)
+    heat = np.array(r["heat"])
+    lit = np.flatnonzero(heat)
+    assert lit.size and lit.min() >= 99 and lit.max() <= 105  # 1 bin = 1 s
+    assert heat[lit].min() >= HEAT_FLOOR * r["heat_threshold"]

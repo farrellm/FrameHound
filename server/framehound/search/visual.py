@@ -23,6 +23,7 @@ SNAP_S = 1.0
 PAD_S = 0.5
 TOP_PCT = 99.0
 THUMBS_PER_CANDIDATE = 3
+HEAT_FLOOR = 0.75  # of the threshold; weaker frames are noise in the strip
 
 
 @dataclass
@@ -173,9 +174,9 @@ class VisualIndex:
             cands.append(c)
         cands = nms(cands)[:top_k]
         dt = float(np.median(np.diff(self.times))) if self.times.size > 1 else 0.5
+        heat = np.where(zs >= HEAT_FLOOR * thr, zs, 0)
         series = spans_to_series([(float(t), float(t) + dt, float(v))
-                                  for t, v in zip(self.times, np.clip(zs, 0, None),
-                                                  strict=True)],
+                                  for t, v in zip(self.times, heat, strict=True)],
                                  duration_s or float(self.times[-1] + dt))
         return {"candidates": cands, "heat": max_pool(series, heat_bins),
                 "heat_threshold": round(thr, 3)}
