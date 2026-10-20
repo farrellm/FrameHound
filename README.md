@@ -84,7 +84,7 @@ make deploy     # build, install docker/framehound.service as a user unit, start
 ```
 
 The unit brings the stack up at boot (it needs `loginctl enable-linger`) and
-publishes it with `tailscale serve` at https://agda.tail0cb6d.ts.net:8449.
+publishes it with `tailscale serve` at https://agda.tail0cb6d.ts.net:8451.
 That mapping is tailnet-only, never Funnel. Set `FH_TOKEN` in `.env` so every
 device on the tailnet has to sign in too.
 `make status` shows the unit and the mapping, `make logs` follows the stack, and

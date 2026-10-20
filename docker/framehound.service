@@ -22,15 +22,16 @@ ExecStartPre=/bin/sh -c 'for d in "$$FH_DATA_DIR" "$$FH_MEDIA_DIR" "$$FH_REDIS_D
 # No --build: `make deploy` builds the images, so a boot never rebuilds.
 # --wait blocks until every service is running (none has a healthcheck).
 ExecStart=/usr/bin/docker compose up -d --wait
-# Port 8449, tailnet-only: 443 and 8443-8448 belong to other apps on this host.
+# Port 8451, tailnet-only: 443 and 8443-8450 belong to other apps on this host
+# (8449 is AisleFlow, 8450 bitmagnet).
 # `serve` and never `funnel` -- there is no auth until M4 (design.md §10), so
 # the tailnet is the whole perimeter. 8080 is the FH_PORT default the web
 # container binds on 127.0.0.1. Idempotent; keeps this unit the single source
 # of truth for how FrameHound is exposed, even though tailscaled persists the
 # serve config on its own. `timeout` guards against the CLI hanging.
-ExecStartPost=/usr/bin/timeout 15 /usr/bin/tailscale serve --bg --https=8449 http://127.0.0.1:8080
+ExecStartPost=/usr/bin/timeout 15 /usr/bin/tailscale serve --bg --https=8451 http://127.0.0.1:8080
 ExecStop=/usr/bin/docker compose down
-ExecStopPost=-/usr/bin/timeout 15 /usr/bin/tailscale serve --https=8449 off
+ExecStopPost=-/usr/bin/timeout 15 /usr/bin/tailscale serve --https=8451 off
 Restart=on-failure
 RestartSec=10
 # The first boot after a prune may pull redis.

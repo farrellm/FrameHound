@@ -14,7 +14,7 @@ EnvironmentFile=-%h/workspace/FrameHound/docker/bitmagnet/.env
 ExecStartPre=/bin/sh -c 'for d in "$$BITMAGNET_PG_DIR" "$$BITMAGNET_CONFIG_DIR"; do [ -z "$$d" ] || until [ -d "$$d" ]; do sleep 2; done; done'
 ExecStart=/usr/bin/docker compose up -d --wait
 # Web UI on port 8450, tailnet-only (`serve`, never `funnel`): bitmagnet has
-# no auth, so the tailnet is the whole perimeter. 8449 is FrameHound's.
+# no auth, so the tailnet is the whole perimeter. 8451 is FrameHound's.
 ExecStartPost=/usr/bin/timeout 15 /usr/bin/tailscale serve --bg --https=8450 http://127.0.0.1:3333
 ExecStop=/usr/bin/docker compose down
 ExecStopPost=-/usr/bin/timeout 15 /usr/bin/tailscale serve --https=8450 off
