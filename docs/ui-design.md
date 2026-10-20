@@ -369,7 +369,7 @@ The three modes map to the API's `type`:
 
 - **Body.** Emulsion, with sprocket holes along the top and bottom edges in `--table` color. Shot thumbnails sit in the gate at their real positions in time.
 - **Heat.**
-  - Grease-pencil marks in `--marker` sit under the gate. Each mark's **height** (0–100% of the band) is the smoothed score z(t) from the API's `heat` series. Marks inside a listed match (the top 10) are drawn in `--red-marker`, so the strip shows which bright spots made the list.
+  - Grease-pencil marks in `--marker` sit under the gate. Each mark's **height** (0–100% of the band) is the smoothed score z(t) from the API's `heat` series. Each listed match (the top 10) is drawn as one bar in `--red-marker` over its span, as tall as its hottest mark and at least 5px wide, on top of the yellow marks, so the strip shows which bright spots made the list even in the overview, where a match covers a pixel or two.
   - Above threshold, marks thicken into a solid bar. Height and thickness carry the information, so it never depends on color.
   - The marks draw in once per search (§2, Motion).
 - **Candidate span and handles.** The selected candidate shows as a span with china-marker brackets `▌ ▐` (in/out), filled at 35% marker over the frames.

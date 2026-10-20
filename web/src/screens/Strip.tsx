@@ -1,5 +1,5 @@
 // The film strip (ui-design.md §4.3): Emulsion body, sprocket edges, frames in
-// the gate at their real times, grease-pencil heat under the gate (red where it's a listed match), china-marker
+// the gate at their real times, grease-pencil heat under the gate (a red bar over each listed match), china-marker
 // in/out brackets, and the playhead.
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Shot } from "../api";
@@ -191,41 +191,46 @@ export function Strip(p: Props) {
   );
 }
 
+// The narrowest a listed match is drawn, in px.
+const MATCH_W = 5;
+
 function Heat(p: Props & { w: number; x: (t: number) => number }) {
   if (!p.heat?.length) return <svg className="heat" aria-hidden="true" height={HEAT_H} />;
   const n = p.heat.length;
   const binS = p.duration / n;
   const scale = Math.max(p.threshold * 1.6, ...p.heat.map((z) => z * 0.9), 1);
   const marks: React.ReactNode[] = [];
-  // Several bins share a pixel in the overview: match marks go last so they stay on top.
-  const tops: React.ReactNode[] = [];
   const lo = Math.max(0, Math.floor(p.view.from / binS));
   const hi = Math.min(n, Math.ceil(p.view.to / binS));
+  const height = (z: number) => Math.max(3, Math.min(z / scale, 1) * (HEAT_H - 4));
+  const delay = (left: number) => ({ animationDelay: `${Math.round((Math.max(left, 0) / p.w) * 450)}ms` });
   for (let i = lo; i < hi; i++) {
     const z = p.heat[i];
     if (z < 1) continue; // below 1 MAD is noise, not a mark
     const x0 = p.x(i * binS);
     const x1 = p.x((i + 1) * binS);
-    const h = Math.max(3, Math.min(z / scale, 1) * (HEAT_H - 4));
+    const h = height(z);
     // Above threshold the marks thicken into a solid bar; below, a thin stroke.
     const solid = z >= p.threshold;
-    const t0 = i * binS;
-    const top = p.matches.some((m) => m.end > t0 && m.start < t0 + binS);
     const width = solid ? Math.max(x1 - x0 + 0.5, 2) : Math.min(1.5, Math.max(x1 - x0, 1));
-    // Kept inside the strip, so a match in the last second is still visible.
+    // Kept inside the strip, so a mark in the last second is still visible.
     const left = Math.min(solid ? x0 : (x0 + x1) / 2 - width / 2, p.w - width);
-    (top ? tops : marks).push(
-      <rect
-        key={i}
-        className={top ? "top" : undefined}
-        x={left}
-        y={HEAT_H - 2 - h}
-        width={width}
-        height={h}
-        style={{ animationDelay: `${Math.round((Math.max(left, 0) / p.w) * 450)}ms` }}
-      />,
-    );
+    marks.push(<rect key={i} x={left} y={HEAT_H - 2 - h} width={width} height={h} style={delay(left)} />);
   }
+  // Each listed match is one red bar over its span, as tall as its hottest bin. A match covers
+  // a bin or two, under 2px in the overview, so it gets a minimum width to read at a glance.
+  // Drawn last so the yellow marks around it can't cover it.
+  const tops = p.matches.flatMap((m, k) => {
+    if (m.end <= p.view.from || m.start >= p.view.to) return [];
+    const b0 = Math.min(n - 1, Math.max(0, Math.floor(m.start / binS)));
+    const b1 = Math.min(n, Math.max(b0 + 1, Math.ceil(m.end / binS)));
+    const h = height(Math.max(...p.heat!.slice(b0, b1)));
+    const x0 = p.x(m.start);
+    const x1 = p.x(m.end);
+    const width = Math.max(x1 - x0, MATCH_W);
+    const left = Math.max(0, Math.min((x0 + x1) / 2 - width / 2, p.w - width));
+    return [<rect key={`m${k}`} className="top" x={left} y={HEAT_H - 2 - h} width={width} height={h} style={delay(left)} />];
+  });
   return (
     <svg
       className={`heat${p.sweepKey ? " sweep" : ""}`}
