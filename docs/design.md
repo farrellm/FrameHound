@@ -430,7 +430,7 @@ clip:    queued → cutting → ready | failed
 | Colab policy (no P2P, no long-running non-interactive abuse) | Torrents only on host; sessions are short, single-purpose, and always stopped. Revisit if Colab terms change. |
 | Upload bandwidth for torrent/uploaded media (≈1–1.5 GB proxy) | Lower-bitrate "index proxy" option (480p, ≈500 MB) — index quality is still adequate for search. |
 | `colab` CLI is young (v0.7.x); flags/outputs may change | All calls isolated in one adapter class with the fake-binary test suite; pin the CLI version in the image. |
-| CLIP misses small/brief objects | Raise fps for short films; optional tiled (2×2 crop) embeddings stage; reranker. |
+| CLIP misses small/brief objects | Raise fps for short films; optional tiled (2×2 crop) embeddings stage; reranker. Model alternatives: [describe-models.md](describe-models.md). |
 | Face matching on profiles, low light, makeup | Show confidence; let users add multiple reference images (average embeddings). |
 | Whisper hallucinations over music / silence | VAD filter; drop segments with high `no_speech_prob`; fuzzy match tolerates errors. |
 | Model drift between index and query encoders | `models.lock` hash in every bundle; refuse mismatches; offer "re-index". |
@@ -438,5 +438,5 @@ clip:    queued → cutting → ready | failed
 **Open questions**
 
 1. Should indexes be shareable across installs, for example by publishing a bundle keyed by the source SHA so other users can skip indexing?
-2. Is per-frame object detection (for example OWL-ViT) worth adding for "find every appearance of X" style queries, beyond whole-frame embeddings?
+2. Is per-frame object detection (for example OWL-ViT) worth adding for "find every appearance of X" style queries, beyond whole-frame embeddings? (Weighed against other options in [describe-models.md](describe-models.md) §4E.)
 3. Should the face path support *naming* (clustering faces into identities across the film) so a user can pick a character from a gallery instead of uploading a photo?
