@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "whisper": {
+    "repo": "Systran/faster-whisper-large-v3",
+    "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+    "beam_size": 5,
+    "vad_filter": true,
+    "max_no_speech_prob": 0.6
+  },
+  "sentence": {
+    "repo": "BAAI/bge-small-en-v1.5",
+    "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+    "onnx_file": "onnx/model.onnx",
+    "max_length": 256,
+    "pooling": "cls",
+    "dim": 384
+  },
+  "visual": {
+    "kind": "qwen3-vl-embedding",
+    "repo": "Qwen/Qwen3-VL-Embedding-2B",
+    "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+    "image_size": 384,
+    "min_pixels": 4096,
+    "max_pixels": 262144,
+    "query_instruction": "Retrieve images or text relevant to the user's query.",
+    "doc_instruction": "Represent the user's input.",
+    "dim": 2048,
+    "fps": 2,
+    "batch_size": 32
+  },
+  "shots": {
+    "detector": "adaptive-content",
+    "width": 96,
+    "ratio": 3.0,
+    "min_content": 15.0,
+    "window": 2,
+    "min_shot_s": 0.6
+  },
+  "faces": {
+    "repo": "public-data/insightface",
+    "revision": "33c1063c49c785b7652d3fd529f86fa4f149392b",
+    "detector_file": "models/buffalo_l/det_10g.onnx",
+    "recognizer_file": "models/buffalo_l/w600k_r50.onnx",
+    "det_size": 640,
+    "det_score": 0.6,
+    "nms": 0.4,
+    "min_face_px": 40,
+    "decode_height": 720,
+    "dim": 512,
+    "match": 0.4,
+    "batch_size": 64
+  }
+}

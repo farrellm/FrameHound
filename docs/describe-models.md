@@ -7,6 +7,8 @@
 | **Last updated** | 2026-10-20 |
 | **Companion to** | [design.md](design.md) §5 (visual stage) and §6 (text query) |
 
+> **Adopted (2026-10-20):** this install runs Qwen3-VL-Embedding-2B (section D), via `models.qwen.lock`. It was chosen for detailed queries over the cheaper steps below, accepting slower queries. SigLIP 2 stays the default lock. Measured costs are in [design.md §5](design.md#5-stage-2--index-colab-gpu-worker-index).
+
 ## 1. Question
 
 Describe it misses or mis-ranks moments. Would a different model fix that, and at what cost? This note compares candidates on paper. It changes no code, and it ends with the small evaluation that should settle the choice.

@@ -11,7 +11,7 @@ STAGES = ["shots", "visual", "faces", "audio", "sentences"]
 def run_fake(tmp_path, monkeypatch, device: str, prefetched: list | None = None):
     """Run the lanes with stages that just sleep; return (stage, start, end) spans."""
     spans: list[tuple[str, float, float]] = []
-    monkeypatch.setattr(encoders, "prefetch_torch_twin",
+    monkeypatch.setattr(encoders, "prefetch_visual",
                         lambda lock: (prefetched if prefetched is not None else []).append(lock))
     lock = threading.Lock()
 

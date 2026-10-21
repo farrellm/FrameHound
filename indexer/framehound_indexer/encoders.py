@@ -1,10 +1,12 @@
 """Query encoders shared by the indexing pipeline and the api.
 
-Everything runs on ONNX Runtime, so the api needs no torch: ``encode_sentence``
-(bge-small), ``encode_text`` / ``encode_image`` (SigLIP 2) and ``encode_face``
-(InsightFace, in ``faces.py``). The indexing pipeline uses the same classes, on
-CUDA when the VM has it; there the SigLIP vision tower runs in PyTorch when
-``TORCH_TWINS`` has its checkpoint.
+With the default lock everything runs on ONNX Runtime, so the api needs no torch:
+``encode_sentence`` (bge-small), ``encode_text`` / ``encode_image`` (SigLIP 2) and
+``encode_face`` (InsightFace, in ``faces.py``). The indexing pipeline uses the same
+classes, on CUDA when the VM has it; there the SigLIP vision tower runs in PyTorch
+when ``TORCH_TWINS`` has its checkpoint. A lock whose ``visual.kind`` is
+``qwen3-vl-embedding`` swaps SigLIP for ``QwenEncoder``, which runs in PyTorch on
+both sides (the ``qwen`` extra).
 """
 
 from __future__ import annotations
@@ -177,14 +179,17 @@ TORCH_TWINS = {
 }
 
 
-def prefetch_torch_twin(lock: ModelsLock) -> None:
-    """Download the vision tower's PyTorch twin (4.3 GB, about 30 s on Colab) ahead
-    of the visual stage, which would otherwise wait for it."""
-    twin = TORCH_TWINS.get((lock.visual["repo"], lock.visual["revision"]))
-    if twin is None:
+def prefetch_visual(lock: ModelsLock) -> None:
+    """Download the visual stage's PyTorch weights (SigLIP's twin or Qwen, about 4 GB
+    and 30 s on Colab) ahead of the stage, which would otherwise wait for them."""
+    if visual_kind(lock) == QWEN:
+        target = (lock.visual["repo"], lock.visual["revision"], QWEN_FILES)
+    elif twin := TORCH_TWINS.get((lock.visual["repo"], lock.visual["revision"])):
+        target = (*twin, ["config.json", "model.safetensors"])
+    else:
         return
     try:
-        snapshot(twin[0], twin[1], ["config.json", "model.safetensors"])
+        snapshot(*target)
     except Exception as e:  # noqa: BLE001 (the visual stage retries, or uses ONNX)
         import sys
 
@@ -357,19 +362,197 @@ class VisualEncoder:
             out = sess.run(["pooler_output"], feeds)[0]
         return _normalize(out)
 
+    def encode_query(self, q: str) -> np.ndarray:
+        """A prompt ensemble: embed each template, average, renormalize (1-d vector)."""
+        vecs = self.encode_texts([p.format(q=q) for p in PROMPTS])
+        return _normalize(vecs.mean(axis=0, keepdims=True))[0]
+
 
 PROMPTS = ["{q}", "a photo of {q}", "a film still of {q}"]
 
+QWEN = "qwen3-vl-embedding"
+QWEN_FILES = ["*.json", "*.jinja", "merges.txt", "model.safetensors"]
+QWEN_FACTOR = 32  # 16 px patches, merged 2x2 into one token
 
-_visual: VisualEncoder | None = None
+
+def visual_kind(lock: ModelsLock) -> str:
+    """Which model family the lock's visual section names (SigLIP when unset)."""
+    return lock.visual.get("kind", "siglip")
+
+
+def qwen_size(height: int, width: int, min_pixels: int, max_pixels: int,
+              factor: int = QWEN_FACTOR) -> tuple[int, int]:
+    """Qwen-VL's ``smart_resize``: the nearest (height, width) in multiples of
+    ``factor`` whose area is within [min_pixels, max_pixels], aspect kept."""
+    import math
+
+    h = max(factor, round(height / factor) * factor)
+    w = max(factor, round(width / factor) * factor)
+    if h * w > max_pixels:
+        beta = math.sqrt(height * width / max_pixels)
+        h = max(factor, math.floor(height / beta / factor) * factor)
+        w = max(factor, math.floor(width / beta / factor) * factor)
+    elif h * w < min_pixels:
+        beta = math.sqrt(min_pixels / (height * width))
+        h = math.ceil(height * beta / factor) * factor
+        w = math.ceil(width * beta / factor) * factor
+    return h, w
+
+
+def last_token(hidden, mask):
+    """Each row's hidden state at its last unmasked position (right padding)."""
+    import torch
+
+    return hidden[torch.arange(hidden.shape[0], device=hidden.device), mask.sum(dim=1) - 1]
+
+
+class QwenEncoder:
+    """Qwen3-VL-Embedding: one model puts text and images in one space.
+
+    A port of the reference ``Qwen3VLEmbedder`` (the model repo's
+    ``scripts/qwen3_vl_embedding.py``): each input is a chat with the instruction as
+    the system message, embedded as the last token's hidden state, cut to the lock's
+    ``dim`` (Matryoshka) and L2-normalized. Frames and query pictures use
+    ``doc_instruction``, typed queries ``query_instruction``. Images keep their
+    aspect, resized as Qwen-VL's ``smart_resize`` within the lock's pixel bounds.
+
+    Runs in PyTorch: bf16 with SDPA on CUDA, ``$QWEN_DTYPE`` (bfloat16) on the CPU.
+    Same surface as ``VisualEncoder``; its ``preprocess`` returns model inputs.
+    """
+
+    def __init__(self, lock: ModelsLock | None = None, device: str = "cpu", **_):
+        self.cfg = (lock or load_lock()).visual
+        self.device = device
+        self.dim = int(self.cfg["dim"])
+        self._model = None
+        self._processor = None
+        self._lock = threading.Lock()
+
+    def _root(self) -> Path:
+        return snapshot(self.cfg["repo"], self.cfg["revision"], QWEN_FILES)
+
+    def prefetch(self) -> None:
+        self._root()
+
+    def processor(self):
+        with self._lock:
+            if self._processor is None:
+                from transformers import AutoProcessor
+
+                self._processor = AutoProcessor.from_pretrained(self._root(),
+                                                                padding_side="right")
+            return self._processor
+
+    def model(self):
+        with self._lock:
+            if self._model is None:
+                self._model = self._load()
+            return self._model
+
+    def _load(self):
+        import torch
+        from transformers import Qwen3VLModel
+
+        if self.device == "cuda" and torch.cuda.is_available():
+            dev, dtype = "cuda", torch.bfloat16
+        else:
+            dev, dtype = "cpu", getattr(torch, os.environ.get("QWEN_DTYPE", "bfloat16"))
+        model = Qwen3VLModel.from_pretrained(self._root(), dtype=dtype,
+                                             attn_implementation="sdpa")
+        return model.to(dev).eval()
+
+    def unload(self, text: bool = False, vision: bool = False) -> bool:
+        """Drop the model, which serves text and images alike, so only when asked for
+        both; True if it was loaded."""
+        if not (text and vision):
+            return False
+        with self._lock:
+            dropped = self._model is not None
+            self._model = None
+            return dropped
+
+    def vision_backend(self) -> str:
+        m = self.model()
+        return f"torch {m.dtype} sdpa on {m.device} ({self.cfg['repo']})"
+
+    def _inputs(self, instruction: str, items: list[dict]) -> dict:
+        proc = self.processor()
+        chats = [[{"role": "system", "content": [{"type": "text", "text": instruction}]},
+                  {"role": "user", "content": [item]}] for item in items]
+        text = proc.apply_chat_template(chats, add_generation_prompt=True, tokenize=False)
+        images = [it["image"] for it in items if it["type"] == "image"] or None
+        return dict(proc(text=text, images=images, padding=True, do_resize=False,
+                         return_tensors="pt"))
+
+    def _embed(self, inputs: dict) -> np.ndarray:
+        import torch
+
+        model = self.model()
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+        with torch.inference_mode():
+            hidden = model(**inputs).last_hidden_state
+            vecs = last_token(hidden, inputs["attention_mask"])[:, : self.dim]
+        return _normalize(vecs.float().cpu().numpy())
+
+    # images ------------------------------------------------------------------
+
+    def preprocess(self, images: list, max_pixels: int | None = None) -> dict:
+        """PIL images or HxWx3 uint8 arrays → model inputs (tokens and patches).
+        ``max_pixels`` lowers the lock's bound (a query picture, for speed)."""
+        from PIL import Image
+
+        lo, hi = int(self.cfg["min_pixels"]), int(self.cfg["max_pixels"])
+        hi = min(hi, max_pixels or hi)
+        items = []
+        for im in images:
+            if isinstance(im, np.ndarray):
+                im = Image.fromarray(im)
+            im = im.convert("RGB")
+            h, w = qwen_size(im.height, im.width, lo, hi)
+            if (w, h) != im.size:
+                im = im.resize((w, h), resample=Image.BICUBIC)
+            items.append({"type": "image", "image": im})
+        return self._inputs(self.cfg["doc_instruction"], items)
+
+    def encode_pixels(self, pixels: dict) -> np.ndarray:
+        return self._embed(pixels)
+
+    def encode_images(self, images: list, batch_size: int = 16,
+                      max_pixels: int | None = None) -> np.ndarray:
+        if not images:
+            return np.zeros((0, self.dim), dtype=np.float32)
+        return np.concatenate([
+            self.encode_pixels(self.preprocess(images[i : i + batch_size], max_pixels))
+            for i in range(0, len(images), batch_size)])
+
+    # text --------------------------------------------------------------------
+
+    def encode_texts(self, texts: list[str], instruction: str | None = None) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, self.dim), dtype=np.float32)
+        items = [{"type": "text", "text": t} for t in texts]
+        return self._embed(self._inputs(instruction or self.cfg["query_instruction"], items))
+
+    def encode_query(self, q: str) -> np.ndarray:
+        """One instruction-tuned embedding (no prompt templates)."""
+        return self.encode_texts([q])[0]
+
+
+def make_visual_encoder(lock: ModelsLock | None = None, **kw) -> VisualEncoder | QwenEncoder:
+    """The visual encoder the lock names (``visual.kind``)."""
+    lock = lock or load_lock()
+    return (QwenEncoder if visual_kind(lock) == QWEN else VisualEncoder)(lock, **kw)
+
+
+_visual: VisualEncoder | QwenEncoder | None = None
 _visual_lock = threading.Lock()
 
 
-def visual_encoder() -> VisualEncoder:
+def visual_encoder() -> VisualEncoder | QwenEncoder:
     global _visual
     with _visual_lock:
         if _visual is None:
-            _visual = VisualEncoder(arena=False)
+            _visual = make_visual_encoder(arena=False)
         return _visual
 
 
@@ -382,17 +565,26 @@ def _touch(name: str) -> None:
 
 
 def encode_text(q: str) -> np.ndarray:
-    """A prompt ensemble: embed each template, average, renormalize (1-d vector)."""
+    """Describe it's query vector (1-d), as the lock's visual model wants it."""
     try:
-        vecs = visual_encoder().encode_texts([p.format(q=q) for p in PROMPTS])
+        return visual_encoder().encode_query(q)
     finally:
         _touch("text")
-    return _normalize(vecs.mean(axis=0, keepdims=True))[0]
+
+
+# A Show a picture query through Qwen on a CPU takes about 33 s at the frames'
+# 512² bound, 13 s at 320² (cosine 0.93 to the full-size embedding, still matching
+# its own frame first). Only the query picture shrinks, so no re-index is needed.
+QWEN_QUERY_MAX_PIXELS = 102400
 
 
 def encode_image(image) -> np.ndarray:
     try:
-        return visual_encoder().encode_images([image])[0]
+        enc = visual_encoder()
+        if isinstance(enc, QwenEncoder):
+            cap = int(os.environ.get("QWEN_QUERY_MAX_PIXELS") or QWEN_QUERY_MAX_PIXELS)
+            return enc.encode_images([image], max_pixels=cap)[0]
+        return enc.encode_images([image])[0]
     finally:
         _touch("vision")
 
@@ -442,7 +634,12 @@ def unload_idle(idle_s: float) -> list[str]:
     now = time.monotonic()
     idle = {n for n, t in _used.items() if now - t >= idle_s}
     dropped = []
-    if _visual is not None:
+    if isinstance(_visual, QwenEncoder):
+        # One model: idle only when neither kind of query has used it lately.
+        recent = {n for n in ("text", "vision") if n in _used and n not in idle}
+        if not recent and _visual.unload(text=True, vision=True):
+            dropped += [n for n in ("text", "vision") if n in idle]
+    elif _visual is not None:
         for name in ("text", "vision"):
             if name in idle and _visual.unload(**{name: True}):
                 dropped.append(name)

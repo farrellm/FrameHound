@@ -18,6 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 # The pipeline's transcript stage; the api only needs the query encoders.
 asr = ["faster-whisper>=1.0"]
+# The Qwen3-VL-Embedding visual model (models.qwen.lock); torch(vision) come from the
+# CPU index (root pyproject), the Colab VM brings its own CUDA build.
+qwen = ["torch>=2.8", "torchvision>=0.23", "transformers>=4.57"]
 
 [build-system]
 requires = ["hatchling"]

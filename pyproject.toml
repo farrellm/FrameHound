@@ -1,6 +1,17 @@
 [tool.uv.workspace]
 members = ["server", "indexer"]
 
+# CPU-only torch for the api's Qwen query encoder: the CUDA wheels are gigabytes
+# the host never uses.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [dependency-groups]
 dev = [
     "fakeredis>=2.40.0",

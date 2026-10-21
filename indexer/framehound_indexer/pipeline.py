@@ -300,7 +300,7 @@ THUMB_W = 320
 
 
 def stage_visual(ctx: Ctx) -> None:
-    """Decode at ``fps`` once: SigLIP embeddings for every frame, plus each shot's
+    """Decode at ``fps`` once: visual embeddings for every frame, plus each shot's
     thumbnail (the sampled frame nearest its middle)."""
     import queue
 
@@ -309,7 +309,7 @@ def stage_visual(ctx: Ctx) -> None:
     import pyarrow.parquet as pq
     from PIL import Image
 
-    from .encoders import VisualEncoder
+    from .encoders import make_visual_encoder
     from .shots import even, probe, video_frames
 
     cfg = ctx.lock.visual
@@ -333,7 +333,7 @@ def stage_visual(ctx: Ctx) -> None:
         want.setdefault(max(k, 0), []).append(idx)
 
     device = ctx.ort_device()
-    enc = VisualEncoder(ctx.lock, device=device)
+    enc = make_visual_encoder(ctx.lock, device=device)
     print(f"visual: {enc.vision_backend()}", file=sys.stderr, flush=True)
     batch = int(cfg.get("batch_size", 32)) if device == "cuda" else 16
     index = faiss.IndexFlatIP(enc.dim)
@@ -596,9 +596,9 @@ def run(job_path: str | os.PathLike[str]) -> None:
         if ctx.device() == "cuda":
             ctx.gpu_turn = threading.Lock()
             if "visual" in visual and not (work / "visual.done").exists():
-                from .encoders import prefetch_torch_twin
+                from .encoders import prefetch_visual
 
-                threading.Thread(target=prefetch_torch_twin, args=(lock,), daemon=True).start()
+                threading.Thread(target=prefetch_visual, args=(lock,), daemon=True).start()
         lane = None
         if audio and visual and job.get("parallel", True):
             lane = threading.Thread(target=audio_lane, name="audio-lane", daemon=True)

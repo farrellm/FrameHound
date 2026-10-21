@@ -19,6 +19,7 @@ from fastapi import FastAPI, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from framehound_indexer import bundle, load_lock
+from framehound_indexer.encoders import visual_kind
 from pydantic import BaseModel, Field
 
 from . import bitmagnet, db, evict, jobs, queue, tasks
@@ -317,6 +318,7 @@ def health(request: Request):
         "visual_encoder": _visual_state,
         "face_encoder": _face_state,
         "models_lock_hash": load_lock().hash,
+        "visual_model": {"kind": visual_kind(load_lock()), "repo": load_lock().visual["repo"]},
         "auth_required": bool(s.token), "signed_in": True,
         "quota_bytes": int(s.max_data_gb * 1024**3) if s.max_data_gb > 0 else None,
     }

@@ -82,7 +82,7 @@ def test_visual_stage_with_stub_encoder(tmp_path, monkeypatch):
             v = np.concatenate([px, np.ones((len(px), 1), np.float32)], axis=1)
             return v / np.linalg.norm(v, axis=1, keepdims=True)
 
-    monkeypatch.setattr(encoders, "VisualEncoder", Stub)
+    monkeypatch.setattr(encoders, "make_visual_encoder", Stub)
     lock = load_lock("models.tiny.lock")
     ctx = pipeline.Ctx(job={"duration_s": 6.0, "device": "cpu"}, work=video.parent,
                        out=tmp_path, lock=lock, progress=pipeline.Progress(tmp_path / "p.jsonl"))

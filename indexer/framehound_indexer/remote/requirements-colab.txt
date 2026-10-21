@@ -1,7 +1,9 @@
 # Installed on the Colab VM with `colab install -r` (the image already has numpy,
-# pyarrow, pillow, httpx, huggingface-hub and tokenizers). onnxruntime-gpu is
-# swapped in by run.py, after faster-whisper pulls in the CPU build.
+# pyarrow, pillow, httpx, huggingface-hub and tokenizers, and CUDA torch and
+# torchvision). onnxruntime-gpu is swapped in by run.py, after faster-whisper pulls
+# in the CPU build. transformers runs SigLIP's PyTorch twin and Qwen3-VL (4.57+).
 faster-whisper>=1.1
 faiss-cpu>=1.8
 zstandard>=0.22
 onnxruntime>=1.20
+transformers>=4.57
