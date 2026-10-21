@@ -409,7 +409,7 @@ Pressing ? opens the key list.
   - **Reason**, in words: **Looks like** (visual), **Same face** (face), or **Says** (dialogue). A dialogue candidate also shows the matched words, quoted.
   - **Span** in tabular numerals, `0:14:02–0:14:19`.
 - There is no numeric score. Order carries rank, and the strip shows strength.
-- Tapping a candidate selects it, zooms the strip, seeks the player to its peak, and plays muted on iPhone (unmuted on desktop).
+- Tapping a candidate selects it, zooms the strip, seeks the player to its start, and plays muted on iPhone (unmuted on desktop).
 - The selected candidate has a 3 px `--splice` bar on its leading edge.
 
 **Search states.**

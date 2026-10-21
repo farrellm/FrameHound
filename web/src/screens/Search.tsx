@@ -204,7 +204,9 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
       animateView({ from: Math.max(0, c.start - ZOOM_PAD_S), to: Math.min(duration, c.end + ZOOM_PAD_S) });
       const v = video.current;
       if (v) {
-        seek(c.peak_t);
+        // iOS may not have loaded metadata yet, and drops a seek made before it has.
+        if (v.readyState >= HTMLMediaElement.HAVE_METADATA) seek(c.start);
+        else v.addEventListener("loadedmetadata", () => seek(c.start), { once: true });
         v.muted = coarse(); // muted on iPhone, sound on desktop
         v.play().catch(() => {});
       }
