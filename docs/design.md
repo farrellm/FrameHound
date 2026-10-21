@@ -284,7 +284,7 @@ Each frame's raw score `s(t)` (sampled at 2 Hz) becomes a list of candidate segm
 1. **Normalize per movie.** Compute `z(t) = (s(t) − median) / MAD`. Raw CLIP cosines drift with the query, so a fixed threshold doesn't work.
 2. **Smooth.** Apply a moving max over a 1 s window to fill single-frame dropouts.
 3. **Threshold.** Keep frames with `z ≥ max(Z_MIN, z_(top 1%))`, where `Z_MIN` defaults to 3.0.
-4. **Merge.** Join kept frames into runs, merging across gaps under 1.5 s.
+4. **Merge.** Join kept frames into runs, merging across gaps under 2.5 s, or under 5 s when either side is shorter than 5 s.
 5. **Snap and pad.** Extend each run to the nearest shot boundary if one is within 1 s, and pad by 0.5 s on each side.
 6. **Rank.** Score each segment as `peak_z × (1 + 0.1·log(1 + duration_s))`, apply NMS on time overlap, and return the top K (default 10).
 

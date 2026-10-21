@@ -18,7 +18,9 @@ from .faces import FaceIndex
 from .heat import max_pool, nms, robust_z, spans_to_series
 
 SMOOTH_S = 1.0
-MERGE_GAP_S = 1.5
+MERGE_GAP_S = 2.5
+SHORT_RUN_S = 5.0  # a run this short joins a neighbour across a wider gap
+SHORT_MERGE_GAP_S = 5.0
 SNAP_S = 1.0
 PAD_S = 0.5
 TOP_PCT = 99.0
@@ -59,6 +61,21 @@ def _snap(t: float, bounds: np.ndarray, within: float) -> float:
     return float(bounds[i]) if abs(bounds[i] - t) <= within else t
 
 
+def merge_short(runs: list[list[int]], times: np.ndarray, dt: float) -> list[list[int]]:
+    """Join a run shorter than ``SHORT_RUN_S`` to its neighbour when they are under
+    ``SHORT_MERGE_GAP_S`` apart: flickers of one moment read as one candidate."""
+    out = [runs[0]]
+    for run in runs[1:]:
+        prev = out[-1]
+        gap = times[run[0]] - times[prev[-1]] - dt
+        short = min(times[prev[-1]] - times[prev[0]], times[run[-1]] - times[run[0]]) + dt
+        if gap < SHORT_MERGE_GAP_S and short < SHORT_RUN_S:
+            prev.extend(run)
+        else:
+            out.append(run)
+    return out
+
+
 def segments(z: np.ndarray, times: np.ndarray, shots: list[tuple[float, float]],
              duration_s: float, z_min: float) -> tuple[list[Segment], float, np.ndarray]:
     """Frame z-scores → ranked segments.
@@ -80,6 +97,7 @@ def segments(z: np.ndarray, times: np.ndarray, shots: list[tuple[float, float]],
             runs[-1].append(int(i))
         else:
             runs.append([int(i)])
+    runs = merge_short(runs, times, dt)
     starts = np.array([a for a, _ in shots], dtype=np.float64)
     ends = np.array([b for _, b in shots], dtype=np.float64)
     bounds = np.unique(np.concatenate([starts, ends])) if shots else np.zeros(0)

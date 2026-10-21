@@ -34,8 +34,24 @@ def test_dropout_is_filled_and_gaps_merge():
     s = series(3000, [(100, 103, 0.3), (103.5, 106, 0.3)])  # one-frame dropout at 103
     segs, _, _ = run(s)
     assert len(segs) == 1 and segs[0].start < 100 and segs[0].end > 106
-    # Runs 1.4 s apart merge; 3 s apart don't.
-    s = series(3000, [(100, 101, 0.3), (102.4, 103, 0.3), (106, 107, 0.3)])
+    # Runs 1.4 s apart merge; 7 s apart don't.
+    s = series(3000, [(100, 101, 0.3), (102.4, 103, 0.3), (110, 111, 0.3)])
+    assert len(run(s)[0]) == 2
+
+
+def test_short_runs_merge_across_wider_gaps():
+    # A 3 s run 4 s after a 10 s run joins it...
+    s = series(3000, [(100, 110, 0.3), (114, 117, 0.3)])
+    segs, _, _ = run(s)
+    assert len(segs) == 1 and segs[0].start < 100 and segs[0].end > 117
+    # ...and any two runs 3 s apart merge,
+    s = series(3000, [(100, 110, 0.3), (113, 123, 0.3)])
+    assert len(run(s)[0]) == 1
+    # but two long runs 5 s apart stay separate,
+    s = series(3000, [(100, 110, 0.3), (115, 125, 0.3)])
+    assert len(run(s)[0]) == 2
+    # and a short run 7 s away stays separate.
+    s = series(3000, [(100, 110, 0.3), (117, 118, 0.3)])
     assert len(run(s)[0]) == 2
 
 
