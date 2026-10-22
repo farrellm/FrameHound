@@ -31,6 +31,8 @@ interface Props {
   onWhole: () => void;
   /** Sets the view directly (no animation), as a bracket pushes past the strip's edge. */
   onView: (v: View) => void;
+  /** A bracket drag ended. */
+  onBracketUp: () => void;
 }
 
 const GATE_H = 64;
@@ -108,8 +110,10 @@ export function Strip(p: Props) {
     if (!edgeDepth(g.kind, clientX)) (g.kind === "in" ? p.onIn : p.onOut)(timeAt(clientX));
   }
   function bracketUp() {
-    cancelAnimationFrame(drag.current?.raf ?? 0);
+    if (!drag.current) return;
+    cancelAnimationFrame(drag.current.raf);
     drag.current = null;
+    p.onBracketUp();
   }
   // A bracket stepped by keyboard outside the view widens the view just enough to show it.
   function bracketKey(kind: "in" | "out", t: number) {

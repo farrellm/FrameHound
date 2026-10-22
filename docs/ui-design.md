@@ -378,6 +378,7 @@ The three modes map to the API's `type`:
 - **Gestures.**
   - Horizontal drag on the strip scrubs.
   - Dragging a bracket moves that bracket. Its hit area is 44 × 44 pt even though the visible mark is 6 px wide.
+  - While a bracket is dragged, the player pauses and shows the bracket's frame. Letting go of either bracket plays the clip from its start.
   - Dragging a bracket to within a thumb-width of the strip's edge zooms the strip out on that side, so a clip can extend past the initial ±10 s. The bracket stays a thumb-width inside the edge, clear of Safari's edge-swipe navigation.
   - On iPhone, a long press on a bracket gives haptic feedback where supported and shows a loupe of the frame.
   - Vertical drags pass through to page scroll. The strip never traps scrolling.

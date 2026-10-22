@@ -113,14 +113,39 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
     };
   }, []);
 
+  // A drag's seeks wait for the one in flight, then jump to the latest target. Setting
+  // currentTime mid-seek restarts it, and a backward seek decodes from the keyframe before it
+  // (seconds back in the proxy), so a leftward drag would never show a frame until it stopped.
+  // fastSeek (keyframe-near, for scrubbing) where the browser has it; exact otherwise.
+  const pendingSeek = useRef<{ to: number; fast: boolean } | null>(null);
+  const startSeek = (v: HTMLVideoElement, to: number, fast: boolean) => {
+    if (fast && "fastSeek" in v) v.fastSeek(to);
+    else v.currentTime = to;
+  };
+  useEffect(() => {
+    const v = video.current!;
+    const onSeeked = () => {
+      const s = pendingSeek.current;
+      if (!s) return;
+      pendingSeek.current = null;
+      startSeek(v, s.to, s.fast);
+    };
+    v.addEventListener("seeked", onSeeked);
+    return () => v.removeEventListener("seeked", onSeeked);
+  }, []);
+
+  /** `final` seeks right away; otherwise the seek is one of a drag's (`exact` lands on the frame). */
   const seek = useCallback(
-    (to: number, final = true) => {
+    (to: number, final = true, exact = false) => {
       const v = video.current;
       const clamped = Math.min(Math.max(to, 0), duration);
       setT(clamped);
       if (!v) return;
-      if (!final && "fastSeek" in v) v.fastSeek(clamped);
-      else v.currentTime = clamped;
+      if (final) {
+        pendingSeek.current = null;
+        v.currentTime = clamped;
+      } else if (v.seeking) pendingSeek.current = { to: clamped, fast: !exact };
+      else startSeek(v, clamped, !exact);
     },
     [duration],
   );
@@ -200,6 +225,19 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
     return () => document.removeEventListener("paste", onPaste);
   }, [mode]);
 
+  const playFrom = useCallback(
+    (at: number) => {
+      const v = video.current;
+      if (!v) return;
+      // iOS may not have loaded metadata yet, and drops a seek made before it has.
+      if (v.readyState >= HTMLMediaElement.HAVE_METADATA) seek(at);
+      else v.addEventListener("loadedmetadata", () => seek(at), { once: true });
+      v.muted = coarse(); // muted on iPhone, sound on desktop
+      v.play().catch(() => {});
+    },
+    [seek],
+  );
+
   const select = useCallback(
     (i: number) => {
       const c = result?.candidates[i];
@@ -208,16 +246,9 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
       setIn(c.start);
       setOut(c.end);
       animateView({ from: Math.max(0, c.start - ZOOM_PAD_S), to: Math.min(duration, c.end + ZOOM_PAD_S) });
-      const v = video.current;
-      if (v) {
-        // iOS may not have loaded metadata yet, and drops a seek made before it has.
-        if (v.readyState >= HTMLMediaElement.HAVE_METADATA) seek(c.start);
-        else v.addEventListener("loadedmetadata", () => seek(c.start), { once: true });
-        v.muted = coarse(); // muted on iPhone, sound on desktop
-        v.play().catch(() => {});
-      }
+      playFrom(c.start);
     },
-    [result, animateView, duration, seek],
+    [result, animateView, duration, playFrom],
   );
 
   const setInAt = useCallback(
@@ -238,8 +269,25 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
     },
     [duration, inPt],
   );
-  const dragIn = (x: number) => setIn(Math.min(Math.max(x, 0), (outPt ?? duration) - frame));
-  const dragOut = (x: number) => setOut(Math.max(Math.min(x, duration), (inPt ?? 0) + frame));
+  // A dragged bracket shows its frame in the player; letting go plays the clip from its start.
+  // The in point is also kept in a ref, since the release comes before a render with the last move.
+  const inRef = useRef(inPt);
+  inRef.current = inPt;
+  const preview = (at: number) => {
+    video.current?.pause();
+    seek(at, false, true);
+  };
+  const dragIn = (x: number) => {
+    const v = Math.min(Math.max(x, 0), (outPt ?? duration) - frame);
+    setIn(v);
+    inRef.current = v;
+    preview(v);
+  };
+  const dragOut = (x: number) => {
+    const v = Math.max(Math.min(x, duration), (inPt ?? 0) + frame);
+    setOut(v);
+    preview(v);
+  };
 
   const canCut = movie.has_source && inPt != null && outPt != null && outPt > inPt;
 
@@ -480,6 +528,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             onOut={dragOut}
             onWhole={whole}
             onView={setView}
+            onBracketUp={() => inRef.current != null && playFrom(inRef.current)}
           />
         </div>
         <div className="precision">
