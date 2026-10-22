@@ -1,7 +1,7 @@
 // The film strip (ui-design.md §4.3): Emulsion body, sprocket edges, frames in
 // the gate at their real times, grease-pencil heat under the gate (a red bar over each listed match), china-marker
 // in/out brackets, and the playhead.
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Shot } from "../api";
 import { spoken } from "../format";
 
@@ -29,12 +29,18 @@ interface Props {
   onIn: (t: number) => void;
   onOut: (t: number) => void;
   onWhole: () => void;
+  /** Sets the view directly (no animation), as a bracket pushes past the strip's edge. */
+  onView: (v: View) => void;
 }
 
 const GATE_H = 64;
 const HEAT_H = 34;
 const SPROCKET_H = 9;
 const FRAME_W = Math.round((GATE_H * 4) / 3);
+// A bracket dragged within this many px of the strip's edge (or past it) zooms the strip out,
+// held this far in. A thumb-width, so on iPhone, where the strip runs edge to edge, the finger
+// stays clear of the screen edge (Safari takes a touch there as swipe back/forward).
+const EDGE_PX = 44;
 
 export function Strip(p: Props) {
   const wrap = useRef<HTMLDivElement>(null);
@@ -55,6 +61,63 @@ export function Strip(p: Props) {
     const f = (clientX - r.left) / r.width;
     return Math.min(Math.max(p.view.from + f * span, 0), p.duration);
   };
+
+  // A held bracket near the strip's edge zooms the strip out on that side, so the clip can run
+  // past the view; the deeper the push, the faster (proportional to the span). The bracket
+  // stays EDGE_PX inside the edge while it pushes.
+  const latest = useRef({ p, w, timeAt });
+  latest.current = { p, w, timeAt };
+  const drag = useRef<{ kind: "in" | "out"; x: number; raf: number; last: number } | null>(null);
+  useEffect(() => () => cancelAnimationFrame(drag.current?.raf ?? 0), []);
+  function edgeDepth(kind: "in" | "out", clientX: number) {
+    const r = wrap.current!.getBoundingClientRect();
+    const d = kind === "out" ? clientX - (r.right - EDGE_PX) : r.left + EDGE_PX - clientX;
+    return d > 0 ? d : 0;
+  }
+  function tick(now: number) {
+    const g = drag.current;
+    if (!g) return;
+    const { p, w, timeAt } = latest.current;
+    const dt = Math.min(Math.max((now - g.last) / 1000, 0), 0.1);
+    g.last = now;
+    const depth = edgeDepth(g.kind, g.x);
+    if (depth > 0) {
+      const span = p.view.to - p.view.from;
+      const rate = span * Math.min(0.3 + depth / 48, 1.5);
+      const inset = (span2: number) => (EDGE_PX / w) * span2;
+      if (g.kind === "out" && p.view.to < p.duration) {
+        const to = Math.min(p.view.to + rate * dt, p.duration);
+        p.onView({ from: p.view.from, to });
+        p.onOut(to - inset(to - p.view.from));
+      } else if (g.kind === "in" && p.view.from > 0) {
+        const from = Math.max(p.view.from - rate * dt, 0);
+        p.onView({ from, to: p.view.to });
+        p.onIn(from + inset(p.view.to - from));
+      } else (g.kind === "in" ? p.onIn : p.onOut)(timeAt(g.x));
+    }
+    g.raf = requestAnimationFrame(tick);
+  }
+  function bracketDown(kind: "in" | "out", clientX: number) {
+    cancelAnimationFrame(drag.current?.raf ?? 0);
+    drag.current = { kind, x: clientX, last: performance.now(), raf: requestAnimationFrame(tick) };
+  }
+  function bracketMove(clientX: number) {
+    const g = drag.current;
+    if (!g) return;
+    g.x = clientX;
+    if (!edgeDepth(g.kind, clientX)) (g.kind === "in" ? p.onIn : p.onOut)(timeAt(clientX));
+  }
+  function bracketUp() {
+    cancelAnimationFrame(drag.current?.raf ?? 0);
+    drag.current = null;
+  }
+  // A bracket stepped by keyboard outside the view widens the view just enough to show it.
+  function bracketKey(kind: "in" | "out", t: number) {
+    const v = Math.min(Math.max(t, 0), p.duration);
+    if (v < p.view.from) p.onView({ from: v, to: p.view.to });
+    else if (v > p.view.to) p.onView({ from: p.view.from, to: v });
+    (kind === "in" ? p.onIn : p.onOut)(t);
+  }
 
   // Scrub with one finger; two fingers pinching together return to the whole movie.
   const pointers = useRef(new Map<number, number>());
@@ -171,8 +234,10 @@ export function Strip(p: Props) {
             left={x(p.inPt)}
             duration={p.duration}
             fps={p.fps}
-            timeAt={timeAt}
-            onMove={p.onIn}
+            onDown={(cx) => bracketDown("in", cx)}
+            onDrag={bracketMove}
+            onUp={bracketUp}
+            onStep={(t) => bracketKey("in", t)}
           />
         )}
         {p.outPt != null && (
@@ -182,8 +247,10 @@ export function Strip(p: Props) {
             left={x(p.outPt)}
             duration={p.duration}
             fps={p.fps}
-            timeAt={timeAt}
-            onMove={p.onOut}
+            onDown={(cx) => bracketDown("out", cx)}
+            onDrag={bracketMove}
+            onUp={bracketUp}
+            onStep={(t) => bracketKey("out", t)}
           />
         )}
       </div>
@@ -251,8 +318,10 @@ function Bracket(p: {
   left: number;
   duration: number;
   fps: number;
-  timeAt: (x: number) => number;
-  onMove: (t: number) => void;
+  onDown: (clientX: number) => void;
+  onDrag: (clientX: number) => void;
+  onUp: () => void;
+  onStep: (t: number) => void;
 }) {
   const dragging = useRef(false);
   return (
@@ -269,14 +338,21 @@ function Bracket(p: {
         e.stopPropagation();
         dragging.current = true;
         e.currentTarget.setPointerCapture(e.pointerId);
+        p.onDown(e.clientX);
       }}
-      onPointerMove={(e) => dragging.current && p.onMove(p.timeAt(e.clientX))}
-      onPointerUp={() => (dragging.current = false)}
-      onPointerCancel={() => (dragging.current = false)}
+      onPointerMove={(e) => dragging.current && p.onDrag(e.clientX)}
+      onPointerUp={() => {
+        dragging.current = false;
+        p.onUp();
+      }}
+      onPointerCancel={() => {
+        dragging.current = false;
+        p.onUp();
+      }}
       onKeyDown={(e) => {
         const d = e.shiftKey ? 0.5 : 1 / p.fps;
-        if (e.key === "ArrowLeft") p.onMove(p.t - d);
-        else if (e.key === "ArrowRight") p.onMove(p.t + d);
+        if (e.key === "ArrowLeft") p.onStep(p.t - d);
+        else if (e.key === "ArrowRight") p.onStep(p.t + d);
         else return;
         e.preventDefault();
         e.stopPropagation();

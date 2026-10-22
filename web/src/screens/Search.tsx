@@ -74,12 +74,18 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
   const [sideOpen, setSideOpen] = useState(false);
   const { announce } = useAnnouncer();
 
-  // Keep the selection in the URL so a reload (or a shared link) restores it.
+  // Keep the selection in the URL so a reload (or a shared link) restores it. Written once the
+  // brackets settle: a drag moves them every frame, past Safari's replaceState limit.
   useEffect(() => {
-    setQuery({
-      in: inPt != null ? inPt.toFixed(2) : null,
-      out: outPt != null ? outPt.toFixed(2) : null,
-    });
+    const id = setTimeout(
+      () =>
+        setQuery({
+          in: inPt != null ? inPt.toFixed(2) : null,
+          out: outPt != null ? outPt.toFixed(2) : null,
+        }),
+      300,
+    );
+    return () => clearTimeout(id);
   }, [inPt, outPt]);
 
   // Follow the video: rAF while playing, events otherwise.
@@ -472,6 +478,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             onIn={dragIn}
             onOut={dragOut}
             onWhole={whole}
+            onView={setView}
           />
         </div>
         <div className="precision">

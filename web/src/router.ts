@@ -10,14 +10,19 @@ export function navigate(to: string, opts: { replace?: boolean } = {}) {
   if (!opts.replace) window.scrollTo(0, 0);
 }
 
-/** Update query params in place (no new history entry). */
+/** Update query params in place (no new history entry). Best effort: Safari throws once
+ * replaceState is called more than 100 times in a short window, and a stale URL beats a crash. */
 export function setQuery(params: Record<string, string | null>) {
   const url = new URL(location.href);
   for (const [k, v] of Object.entries(params)) {
     if (v == null || v === "") url.searchParams.delete(k);
     else url.searchParams.set(k, v);
   }
-  history.replaceState(null, "", url.pathname + url.search);
+  try {
+    history.replaceState(null, "", url.pathname + url.search);
+  } catch {
+    // throttled; the next write catches up
+  }
 }
 
 export function useLocation() {
