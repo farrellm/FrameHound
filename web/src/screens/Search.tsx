@@ -404,7 +404,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             id="q"
             className="field"
             rows={Math.min(3, Math.max(1, Math.ceil(q.length / 32)))}
-            placeholder="Describe what's on screen, like a man in a hat on the phone"
+            placeholder="Describe what's on screen, like a man in a hat reading a newspaper"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
@@ -416,6 +416,7 @@ export function Search({ movie, onChanged }: { movie: Movie; onChanged: () => vo
             onFocus={() => setTyping(coarse())}
             onBlur={() => setTyping(false)}
             enterKeyHint="search"
+            autoComplete="off"
           />
         ) : (
           <input

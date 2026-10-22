@@ -359,7 +359,7 @@ The three modes map to the API's `type`:
 
 | Mode | Input | Placeholder / affordance | API |
 |---|---|---|---|
-| **Describe it** | Text, 1–3 lines, grows | "Describe what's on screen, like a man in a hat on the phone" | `text` |
+| **Describe it** | Text, 1–3 lines, grows | "Describe what's on screen, like a man in a hat reading a newspaper" | `text` |
 | **Show a picture** | `<input type=file accept="image/*">` (iOS offers Photo Library, Take Photo, Choose File), plus paste and drop on desktop | A thumbnail of the chosen image with a ✕ to clear | `image` |
 | **Quote a line** | Text | "Type a line of dialogue, even roughly" | `dialogue` |
 
