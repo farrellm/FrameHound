@@ -1,7 +1,8 @@
 """SourceResolver: turn what the user pasted into something downloadable.
 
-archive.org (items and collections), plain HTTP(S), magnet links and
-.torrent files. Torrents are downloaded by ``torrent.py`` on the host.
+archive.org (items and collections), plain HTTP(S), magnet links,
+.torrent files, and files in the server's import folder. Torrents are
+downloaded by ``torrent.py`` on the host.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from urllib.parse import quote, unquote, urlencode, urlsplit
 
+from . import imports
 from .errors import FHError
 from .media import VIDEO_EXTS
 from .safe_http import SafeClient
@@ -40,8 +42,10 @@ UNRECOGNIZED = ("That isn't a web address or magnet link. "
 
 @dataclass
 class ResolvedSource:
-    kind: str  # archive | http | torrent
-    url: str | None  # a magnet link for torrents (None for a .torrent file)
+    kind: str  # archive | http | torrent | local
+    # a magnet link for torrents (None for a .torrent file); the import folder's
+    # relative path for local files
+    url: str | None
     filename: str | None  # server-derived, e.g. source.mp4; None until a magnet's metadata
     source_ref: str  # canonical form, used to spot duplicates
     title: str | None = None
@@ -181,6 +185,16 @@ class SourceResolver:
                               source_ref=f"btih:{info_hash(ti.info_hashes())}",
                               title=_title(ti.name()),
                               expected_size=f.size)
+
+    # import folder ---------------------------------------------------------
+
+    @staticmethod
+    def resolve_local(rel: str) -> ResolvedSource:
+        p = imports.resolve(rel)
+        rel = p.relative_to(imports.root()).as_posix()
+        return ResolvedSource(kind="local", url=rel, filename=f"source{p.suffix.lower()}",
+                              source_ref=f"file:{rel}", title=_title(p.name),
+                              expected_size=p.stat().st_size)
 
     # plain HTTP ------------------------------------------------------------
 

@@ -1262,3 +1262,29 @@ kbd {
   padding: 12px 0 calc(env(safe-area-inset-bottom) + 16px);
   margin-bottom: calc(-1 * (env(safe-area-inset-bottom) + 16px));
 }
+
+/* The import folder's picker: one can per folder, the file name leads each row. */
+.film-group h3.folder {
+  overflow-wrap: anywhere;
+}
+
+.import-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.import-file .radio {
+  flex: 1;
+  min-width: 0;
+}
+
+.release-name.file-name {
+  color: var(--ink);
+  font-size: inherit;
+}
+
+.file-facts {
+  color: var(--fog);
+  font-size: var(--t-1);
+}

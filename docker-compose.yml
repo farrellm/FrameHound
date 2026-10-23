@@ -16,6 +16,8 @@ x-backend: &backend
     - ${FH_DATA_DIR:-fh-data}:/data
     # Movie files, when MEDIA_DIR=/library splits them off /data (.env.example).
     - ${FH_MEDIA_DIR:-fh-media}:/library
+    # Movie files to add from the server, when IMPORT_DIR=/import (.env.example).
+    - ${FH_IMPORT_DIR:-fh-import}:/import:ro
     # The colab CLI's sign-in and session state (run `colab usage` once on the host
     # to sign in). Shared with the host so `colab sessions` shows the same names.
     - ${COLAB_CONFIG_DIR:-~/.config/colab-cli}:/home/fh/.config/colab-cli
@@ -72,4 +74,5 @@ services:
 volumes:
   fh-data:
   fh-media:
+  fh-import:
   fh-redis:

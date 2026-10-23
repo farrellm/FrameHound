@@ -66,3 +66,11 @@ export function fmtMinutesLeft(eta: number | null | undefined): string | null {
   const m = Math.round(eta / 60);
   return `About ${m} minute${m === 1 ? "" : "s"} left.`;
 }
+
+/** 1.5 GB, 706 MB, in the same binary units as MAX_BYTES (40 GB = 40 × 1024³). */
+export function fmtBytes(n: number | null | undefined): string | null {
+  if (n == null) return null;
+  const gb = n / 1024 ** 3;
+  if (gb >= 1) return `${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB`;
+  return `${Math.max(1, Math.round(n / 1024 ** 2))} MB`;
+}

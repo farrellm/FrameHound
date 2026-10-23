@@ -4,15 +4,8 @@ import { useEffect, useState } from "react";
 import { ApiError, api, type FilmGroup, type TorrentRelease, type TorrentSearch } from "../api";
 import { ErrorDetails } from "../components/ErrorDetails";
 import { Sheet } from "../components/Sheet";
+import { fmtBytes } from "../format";
 import { navigate } from "../router";
-
-/** 1.5 GB, 706 MB, in the same binary units as MAX_BYTES (40 GB = 40 × 1024³). */
-function fmtBytes(n: number | null | undefined): string | null {
-  if (n == null) return null;
-  const gb = n / 1024 ** 3;
-  if (gb >= 1) return `${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB`;
-  return `${Math.max(1, Math.round(n / 1024 ** 2))} MB`;
-}
 
 function fmtRuntime(min: number | null): string | null {
   if (!min) return null;

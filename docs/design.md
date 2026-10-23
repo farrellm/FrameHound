@@ -39,7 +39,7 @@ The design rests on one split. The machine-learning work that has to see every f
 
 The screens, visual language, and iPhone behavior are specified in [ui-design.md](ui-design.md).
 
-1. **Add a movie.** The user pastes a URL, an archive.org link, or a magnet link, or uploads a `.torrent` file. If the archive.org link points to a *collection* rather than a single item, the UI lists the collection's items for the user to pick from. The example in the brief, `archive.org/details/bittorrent`, is a collection named "Archive Torrents" and contains no video file of its own.
+1. **Add a movie.** The user pastes a URL, an archive.org link, or a magnet link, uploads a `.torrent` file, or picks a movie file already in the server's import folder. If the archive.org link points to a *collection* rather than a single item, the UI lists the collection's items for the user to pick from. The example in the brief, `archive.org/details/bittorrent`, is a collection named "Archive Torrents" and contains no video file of its own.
 2. **Watch progress.** A single progress bar steps through: downloading → probing → provisioning GPU → staging media → indexing (shots / frames / faces / transcript) → importing → ready.
 3. **Search.** The user picks a query type and enters text, drops in an image, or types a quote.
 4. **Review candidates.** Results appear as a ranked list, each with a thumbnail strip, a time range, a score, and the matching reason (visual, face, or dialogue). Clicking a candidate seeks the player to it.
@@ -128,6 +128,11 @@ All models are pinned in one `models.lock` file (model id, revision or commit ha
   - Seeding is configurable (`SEED_RATIO`, default 0 = stop when complete; at most `SEED_MAX_S`).
   - By default a torrent waits indefinitely for peers; the user can cancel it. An optional stall timeout makes the job fail with `torrent_stalled` when there are no peers, or no progress, for `TORRENT_STALL_S` seconds (default 0 = off), including while waiting for a magnet's metadata. The Downloading stage shows the peer count, or "Waiting for peers".
   - The SSRF rule holds for peers too: an IP filter refuses loopback, RFC1918, link-local, CGNAT and multicast peers and trackers, and libtorrent's `ssrf_mitigation` is on.
+- **The import folder.** This is optional and on when `IMPORT_DIR` is set (in compose, a read-only mount at `/import`; `server/framehound/imports.py`).
+  - `GET /imports` lists the video files under it (by extension, newest first, dotfiles skipped, at most 2000), each with the `movie_id` it was added as, if any.
+  - A file's `source_kind` is `local`, its `source_url` the path relative to the folder, and its `source_ref` `file:{path}`. A path that leaves the folder (`..`, absolute, or a symlink out) is refused.
+  - Ingest hard-links the file to `source.{ext}` when both are on one filesystem, else copies it (the Downloading stage reads "Copying from the import folder"). The SHA-256 dedup applies as for any source.
+  - These movies are never evicted past their clips: the file in the folder may be gone by the time it's wanted again.
 - **Finding a torrent by name (Bitmagnet).** This is optional and on when `BITMAGNET_URL` is set. [Bitmagnet](https://bitmagnet.io) (`docker/bitmagnet`) crawls the DHT and matches torrents to TMDB films.
   - `server/framehound/bitmagnet.py` sends one GraphQL `torrentContent.search` (content type `movie`, relevance order, 40 results).
   - It groups the releases under the film they matched, in the order of each film's best-ranked release, with releases sorted by seeders. Torrents with no film match come last.
@@ -146,7 +151,7 @@ All models are pinned in one `models.lock` file (model id, revision or commit ha
 | Source kind | How the VM gets the bytes |
 |---|---|
 | archive.org / public HTTP(S) | **The VM downloads the file itself** from the source URL. Datacenter bandwidth is much faster than uploading from home. The VM checks the SHA-256 against the host's value before indexing. |
-| BitTorrent, user upload, auth-gated URL | The host runs `colab upload proxy.mp4 /content/fh/{id}/media.mp4`. **Torrents never run on the VM**, because Colab's usage policy forbids peer-to-peer file sharing. |
+| BitTorrent, import folder, auth-gated URL | The host runs `colab upload proxy.mp4 /content/fh/{id}/media.mp4`. **Torrents never run on the VM**, because Colab's usage policy forbids peer-to-peer file sharing. |
 
 Indexing works on the proxy or on the source, whichever the VM has. Detection quality at 720p is sufficient. Clip *output* always comes from the original `source.*`.
 
@@ -314,8 +319,9 @@ Options:
 
 | Method & path | Body / params | Returns |
 |---|---|---|
-| `POST /movies` | `{source: url \| magnet, title?}` or multipart `.torrent` (`title` overrides the source's own, e.g. a magnet's release name) | `{movie_id, job_id}`, or `{collection, choices: [...]}` for an archive.org collection, or `409 {code: duplicate, movie_id}` |
+| `POST /movies` | `{source: url \| magnet, title?}`, `{file: import-folder path, title?}`, or multipart `.torrent` (`title` overrides the source's own, e.g. a magnet's release name) | `{movie_id, job_id}`, or `{collection, choices: [...]}` for an archive.org collection, or `409 {code: duplicate, movie_id}` |
 | `GET /collections/{identifier}` | `?q=` (title search) | `{collection: {identifier, title, total}, choices: [...]}`: the picker sheet's search, top 100 by downloads |
+| `GET /imports` | — | `{files: [{path, name, bytes, mtime, movie_id}]}`; `404 imports_off` without `IMPORT_DIR` |
 | `GET /torrents/search` | `?q=` (2–200 chars) | `{films: [{title, year, runtime_min, releases: [...]}], unmatched: [...], total, max_bytes}` from Bitmagnet. Each release has `{info_hash, magnet, name, size, files, seeders, leechers, resolution, source, codec, too_big}`. `404 not_configured` without `BITMAGNET_URL`, `502 bitmagnet_unreachable` |
 | `GET /movies` / `GET /movies/{id}` | — | movie metadata + status, latest ingest/index job, `capabilities` (`dialogue`, `visual`, `faces`), `models_ok` |
 | `DELETE /movies/{id}` | — | `204`; cancels its jobs and removes its files (**Remove movie**) |
@@ -383,7 +389,7 @@ clip:    queued → cutting → ready | failed
   - Each job's compute units used (from the before/after difference in `colab usage`) and its GPU type are recorded and shown in the UI.
 - **Disk.**
   - Quota by `MAX_DATA_GB` (0 = none) over `movies/`, checked before each download (counting its expected size), after each proxy, and hourly by the api (`server/framehound/evict.py`, under a file lock so the api and worker-io don't both evict for one overage).
-  - LRU eviction by `last_accessed_at` (a search touches it), skipping movies with a queued or running job. Each pass runs over every movie before the next starts: clip files, then a ready movie's `source.*` (it stays searchable, plays from the proxy, and shows "re-download to clip"), then the rest of a movie (`status = evicted`, index rows dropped, `source.torrent` kept).
+  - LRU eviction by `last_accessed_at` (a search touches it), skipping movies with a queued or running job. Each pass runs over every movie before the next starts: clip files, then a ready movie's `source.*` (it stays searchable, plays from the proxy, and shows "re-download to clip"), then the rest of a movie (`status = evicted`, index rows dropped, `source.torrent` kept). Movies from the import folder lose only their clips.
   - **Re-download** (`POST /movies/{id}/retry`) on a movie whose index is current downloads the source again, checks its SHA-256 against the recorded one, and goes straight back to ready without indexing. An evicted movie goes through ingest and indexing.
 - **Auth.** v1 binds to localhost by default. When `FH_TOKEN` is set, every request but `/health` and `/auth` needs it, as `Authorization: Bearer` or as the `fh_auth` cookie that `POST /auth` sets (HttpOnly, SameSite=Lax, Secure behind https). `<video>`, `<img>`, EventSource and clip links can't send headers, hence the cookie. It holds an HMAC of the token, so changing `FH_TOKEN` signs every browser out.
 - **Observability.**

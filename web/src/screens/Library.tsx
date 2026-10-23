@@ -5,6 +5,7 @@ import { ErrorDetails } from "../components/ErrorDetails";
 import { MiniStrip } from "../components/MiniStrip";
 import { Sheet } from "../components/Sheet";
 import { FindSheet } from "./FindSheet";
+import { ImportSheet } from "./ImportSheet";
 import { fmtDuration } from "../format";
 import { linkProps, navigate } from "../router";
 import { activeGroupPct, activeLabel } from "../stages";
@@ -26,11 +27,13 @@ export function Library() {
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [colabBroken, setColabBroken] = useState(false);
   const [canFind, setCanFind] = useState(false);
+  const [canImport, setCanImport] = useState(false);
   useEffect(() => {
     api.health().then(
       (h) => {
         setColabBroken(h.colab?.state === "auth_broken");
         setCanFind(h.bitmagnet?.state === "ok");
+        setCanImport(h.imports?.state === "ok");
       },
       () => {},
     );
@@ -69,7 +72,7 @@ export function Library() {
           Colab sign-in has expired. On the server, sign the colab CLI in again, then retry indexing.
         </p>
       )}
-      <AddMovie onAdded={load} canFind={canFind} />
+      <AddMovie onAdded={load} canFind={canFind} canImport={canImport} />
       {loadError && (
         <p className="message danger" role="alert">
           {loadError.message}
@@ -132,7 +135,15 @@ function MovieRow({ movie: m }: { movie: Movie }) {
   );
 }
 
-function AddMovie({ onAdded, canFind }: { onAdded: () => void; canFind: boolean }) {
+function AddMovie({
+  onAdded,
+  canFind,
+  canImport,
+}: {
+  onAdded: () => void;
+  canFind: boolean;
+  canImport: boolean;
+}) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -140,23 +151,30 @@ function AddMovie({ onAdded, canFind }: { onAdded: () => void; canFind: boolean 
   const [collection, setCollection] = useState<CollectionResult | null>(null);
   // A movie's name to look up in Bitmagnet, while the find sheet is open.
   const [finding, setFinding] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const { announce } = useAnnouncer();
   const canPaste = typeof navigator.clipboard?.readText === "function";
 
   const torrentInput = useRef<HTMLInputElement>(null);
 
-  async function submit(source: string | File, title?: string) {
+  async function submit(source: string | File | { file: string }, title?: string) {
     setBusy(true);
     setError(null);
     try {
-      const r = typeof source === "string" ? await api.addMovie(source, title) : await api.addTorrent(source);
+      const r =
+        typeof source === "string"
+          ? await api.addMovie(source, title)
+          : source instanceof File
+            ? await api.addTorrent(source)
+            : await api.addFile(source.file);
       if (isCollection(r)) {
         setCollection(r);
       } else {
         setText("");
         setCollection(null);
         setFinding(null);
+        setImporting(false);
         onAdded();
         navigate(`/m/${r.movie_id}`);
       }
@@ -245,6 +263,23 @@ function AddMovie({ onAdded, canFind }: { onAdded: () => void; canFind: boolean 
           <button type="button" className="btn btn-text" disabled={busy} onClick={() => torrentInput.current?.click()}>
             choose a .torrent file
           </button>
+          {canImport && (
+            <>
+              {" "}
+              or{" "}
+              <button
+                type="button"
+                className="btn btn-text"
+                disabled={busy}
+                onClick={() => {
+                  setError(null);
+                  setImporting(true);
+                }}
+              >
+                a file on the server
+              </button>
+            </>
+          )}
           <input
             ref={torrentInput}
             className="visually-hidden"
@@ -259,7 +294,7 @@ function AddMovie({ onAdded, canFind }: { onAdded: () => void; canFind: boolean 
             }}
           />
         </p>
-        {error && !finding && (
+        {error && !finding && !importing && (
           <div id="add-error" role="alert">
             <p className="message danger">{error.message}</p>
             {error.code === "duplicate" && typeof error.extra.movie_id === "string" && (
@@ -279,6 +314,17 @@ function AddMovie({ onAdded, canFind }: { onAdded: () => void; canFind: boolean 
           onPick={(magnet, title) => submit(magnet, title)}
           onClose={() => {
             setFinding(null);
+            setError(null);
+          }}
+        />
+      )}
+      {importing && (
+        <ImportSheet
+          busy={busy}
+          error={error}
+          onPick={(file) => submit({ file })}
+          onClose={() => {
+            setImporting(false);
             setError(null);
           }}
         />

@@ -176,6 +176,7 @@ iPhone                                Desktop
 - **The field** is a single input that accepts an `https://` URL, an archive.org link, or a `magnet:` link. Its placeholder says exactly that.
   - On iPhone the keyboard is `inputmode="url"` (plain text when Bitmagnet is configured, because the URL keyboard has no space bar for a movie's name), and on focus a **Paste** chip appears above the keyboard. Most links arrive by copying from Safari.
   - "Choose a .torrent file" opens the Files picker.
+  - **With an import folder configured** (`IMPORT_DIR`), the line reads "or choose a .torrent file or a file on the server". The second link opens a sheet, built like the release picker: "Pick a movie file from the server.", a search field that filters the list, and the files grouped under their folder (files at the top of the folder first, with no heading). Each row shows the file name, then its size and date. A file that was added already is dimmed, reads "Already added", and has **Open it**. An empty folder reads "The import folder has no movie files. Copy one into it on the server, then open this list again." **Add movie** stays pinned at the bottom.
   - The button is disabled until the field parses as one of the three source types.
   - **With Bitmagnet configured**, the field also takes a movie's name. Its placeholder becomes "Paste a link, or type a movie's name". Text that isn't a link (two letters or more) makes **Add movie** open the release picker below instead of starting a job. It is the same verb and the same pattern as a collection.
 - **Each movie row is a short film strip**: three (phone) or five (desktop) shot thumbnails, then the title, duration, and state. Rows are separated by the strip's own sprocket edge, with no divider lines. Tapping a row opens the Movie screen.
@@ -237,6 +238,7 @@ iPhone                                Desktop
 | Already added | "You've already added this movie." Button: **Open it** (goes straight to Search, with no second indexing). |
 | Collection with no videos | "This collection has no movies FrameHound can index. Try a link to a single item." |
 | Blocked address (SSRF guard) | "FrameHound can't download from private network addresses. Use a public link." |
+| Import file gone | "That file isn't in the import folder any more." |
 | Torrent with no video | "This torrent has no movie file FrameHound can index." |
 | Finding: looking | The note under the field reads "Looking…". There is no spinner. |
 | Finding: no results | "Bitmagnet hasn't seen a movie torrent called that. It keeps crawling, so try another spelling or check back later." |

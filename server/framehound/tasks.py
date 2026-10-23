@@ -9,7 +9,7 @@ import time
 
 from framehound_indexer import load_lock
 
-from . import db, evict, jobs, queue
+from . import db, evict, imports, jobs, queue
 from .colab import SESSION_PREFIX, ColabCli, ColabError
 from .config import settings
 from .download import download, sha256_file
@@ -94,6 +94,13 @@ def run_ingest(job_id: str) -> None:
 
                 src = download_torrent(mdir, m["source_url"], on_file, on_tor,
                                        job.check_cancel)
+            elif m["source_kind"] == "local":
+                assert src is not None
+                imports.copy_in(imports.resolve(m["source_url"]), src,
+                                lambda frac, done, total: job.stage(
+                                    "downloading", frac, eta(frac),
+                                    message="Copying from the import folder"),
+                                job.check_cancel)
             else:
                 assert src is not None
                 with SafeClient() as client:

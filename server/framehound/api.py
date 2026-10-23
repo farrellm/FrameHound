@@ -22,7 +22,7 @@ from framehound_indexer import bundle, load_lock
 from framehound_indexer.encoders import visual_kind
 from pydantic import BaseModel, Field
 
-from . import bitmagnet, db, evict, jobs, queue, tasks
+from . import bitmagnet, db, evict, imports, jobs, queue, tasks
 from .config import settings
 from .errors import FHError
 from .resolver import Collection, SourceResolver
@@ -314,6 +314,7 @@ def health(request: Request):
         "index_backend": s.index_backend,
         "colab": _colab_health(),
         "bitmagnet": {"state": "ok" if s.bitmagnet_url else "not_configured"},
+        "imports": {"state": "ok" if s.import_dir else "not_configured"},
         "encoders": _encoder_state,
         "visual_encoder": _visual_state,
         "face_encoder": _face_state,
@@ -348,7 +349,9 @@ def _colab_health() -> dict:
 # movies -------------------------------------------------------------------------
 
 class AddMovie(BaseModel):
-    source: str = Field(min_length=1, max_length=4096)
+    source: str | None = Field(default=None, min_length=1, max_length=4096)
+    # A path in the import folder, instead of a source.
+    file: str | None = Field(default=None, min_length=1, max_length=4096)
     # A display title to use over the source's own (e.g. a magnet's release name).
     title: str | None = Field(default=None, max_length=300)
 
@@ -384,7 +387,18 @@ async def add_movie(request: Request):
     except Exception as e:
         raise FHError("unrecognized", "Paste a link to a movie.", detail=str(e)) from e
     title = (body.title or "").strip() or None
+    if body.file is not None:
+        return await run_in_threadpool(_add_file, body.file, title)
+    if body.source is None:
+        raise FHError("unrecognized", "Paste a link to a movie.")
     return await run_in_threadpool(_add_movie, body.source.strip(), title)
+
+
+def _add_file(path: str, title: str | None = None):
+    res = SourceResolver.resolve_local(path)
+    if title:
+        res.title = title
+    return _create_movie(res)
 
 
 def _add_torrent_file(data: bytes):
@@ -427,6 +441,18 @@ def _create_movie(res, torrent: bytes | None = None):
         job_id = tasks.start_ingest(conn, movie_id)
     queue.enqueue("ingest", job_id)
     return {"movie_id": movie_id, "job_id": job_id}
+
+
+@app.get("/imports")
+def import_files():
+    files = imports.list_files()
+    with db.db() as conn:
+        added = {r["source_ref"]: r["id"] for r in db.rows(
+            conn, "SELECT id, source_ref FROM movies WHERE source_kind='local' "
+            "AND status<>'merged'")}
+    for f in files:
+        f["movie_id"] = added.get(f"file:{f['path']}")
+    return {"files": files}
 
 
 def _collection_out(c: Collection) -> dict:

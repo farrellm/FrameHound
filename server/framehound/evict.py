@@ -10,6 +10,8 @@ Cheapest loss first (design.md §10):
    Re-download brings it back through ingest and indexing.
 
 Movies with a queued or running job, and those in ``protect``, are never touched.
+Nor are a movie's source and proxy when it came from the import folder: that file
+may be gone by the time it's wanted again, so only its clips go.
 """
 
 from __future__ import annotations
@@ -72,7 +74,7 @@ def _enforce(s, protect, need: int) -> list[str]:
         busy = {r[0] for r in conn.execute(
             "SELECT DISTINCT movie_id FROM jobs WHERE state IN ('queued','running')")}
         movies = [m for m in db.rows(
-            conn, "SELECT id, status, source_file FROM movies WHERE status NOT IN "
+            conn, "SELECT id, status, source_kind, source_file FROM movies WHERE status NOT IN "
             "('merged','evicted','ingesting','indexing') "
             "ORDER BY COALESCE(last_accessed_at, created_at)")
             if m["id"] not in busy and m["id"] not in protect]
@@ -81,6 +83,8 @@ def _enforce(s, protect, need: int) -> list[str]:
             for m in movies:
                 if over <= 0:
                     break
+                if step is not _clips and m["source_kind"] == "local":
+                    continue
                 freed = step(conn, m)
                 if freed:
                     over -= freed

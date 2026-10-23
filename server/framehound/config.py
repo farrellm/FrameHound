@@ -30,6 +30,9 @@ class Settings:
     # they can live on a slower disk than DATA_DIR, which every search reads.
     media_dir: Path = field(default_factory=lambda: Path(_env("MEDIA_DIR", "")
                                                          or _env("DATA_DIR", "/data")))
+    # A folder of movie files on the server to add from (read only); empty = off.
+    import_dir: Path | None = field(default_factory=lambda: Path(_env("IMPORT_DIR", ""))
+                                    if _env("IMPORT_DIR", "") else None)
     # Empty REDIS_URL runs jobs in background threads inside the api (dev mode).
     redis_url: str = field(default_factory=lambda: _env("REDIS_URL", ""))
     index_backend: str = field(default_factory=lambda: _env("INDEX_BACKEND", "colab"))

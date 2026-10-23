@@ -99,8 +99,19 @@ export interface Health {
   colab?: { state: "ok" | "auth_broken" | "error" | "not_configured"; balance_cu?: number; error?: string };
   index_backend?: string;
   bitmagnet?: { state: "ok" | "not_configured" };
+  imports?: { state: "ok" | "not_configured" };
   auth_required: boolean;
   signed_in: boolean;
+}
+
+/** A movie file in the server's import folder. */
+export interface ImportFile {
+  path: string;
+  name: string;
+  bytes: number;
+  mtime: number;
+  /** Set when this file was added already. */
+  movie_id: string | null;
 }
 
 export interface SearchResult {
@@ -235,6 +246,8 @@ export const api = {
   addMovie: (source: string, title?: string) =>
     req<{ movie_id: string; job_id: string } | CollectionResult>("POST", "/movies", { source, title }),
   findTorrents: (q: string) => req<TorrentSearch>("GET", `/torrents/search?q=${encodeURIComponent(q)}`),
+  imports: () => req<{ files: ImportFile[] }>("GET", "/imports"),
+  addFile: (path: string) => req<{ movie_id: string; job_id: string }>("POST", "/movies", { file: path }),
   addTorrent: (file: File) => {
     const form = new FormData();
     form.set("torrent", file, file.name);
