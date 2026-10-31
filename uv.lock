@@ -95,6 +95,12 @@ wheels = [
 ]
 
 [[package]]
+name = "colabkit"
+version = "0.1.0"
+source = { url = "https://github.com/farrellm/colabkit/archive/refs/tags/v0.1.0.tar.gz" }
+sdist = { hash = "sha256:f6b656c11164fda5e2ffb05561b5e5cb6c8aaf666a2af40a1a4056d4b0dae86d" }
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -237,6 +243,7 @@ name = "framehound"
 version = "0.1.0"
 source = { editable = "server" }
 dependencies = [
+    { name = "colabkit" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "framehound-indexer" },
@@ -253,6 +260,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "colabkit", url = "https://github.com/farrellm/colabkit/archive/refs/tags/v0.1.0.tar.gz" },
     { name = "faiss-cpu", specifier = ">=1.8" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "framehound-indexer", editable = "indexer" },

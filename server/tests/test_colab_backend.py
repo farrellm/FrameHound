@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 from framehound import colab, config, db, index_backend, jobs, queue, tasks
-from framehound.errors import FHError
 from test_pipeline_flow import add_local_movie
 
 FAKE_COLAB = Path(__file__).with_name("fake_colab.py")
@@ -103,6 +102,15 @@ def test_no_gpu_at_all(data_dir, fake, monkeypatch):
     assert "L4 or T4" in j["error"]
 
 
+def test_auth_broken_fails_the_job_with_its_code(data_dir, fake, monkeypatch):
+    job_id = ingest(data_dir, "c9")
+    monkeypatch.setenv("FAKE_COLAB_AUTH_BROKEN", "1")
+    tasks.run_index(job_id)
+    j = job_row(job_id)
+    assert j["state"] == "failed" and j["error_code"] == "colab_auth"
+    assert "sign-in has expired" in j["error"]
+
+
 def test_budget_refuses_before_provisioning(data_dir, fake, monkeypatch):
     monkeypatch.setenv("FAKE_COLAB_BALANCE", "1")
     job_id = ingest(data_dir, "c4")
@@ -176,7 +184,7 @@ def test_proxy_is_uploaded_in_parts(data_dir, fake, monkeypatch):
 
 def test_auth_broken(data_dir, fake, monkeypatch):
     monkeypatch.setenv("FAKE_COLAB_AUTH_BROKEN", "1")
-    with pytest.raises(FHError) as e:
+    with pytest.raises(colab.ColabError) as e:
         colab.ColabCli().usage()
     assert e.value.code == "colab_auth"
     from fastapi.testclient import TestClient
@@ -185,15 +193,3 @@ def test_auth_broken(data_dir, fake, monkeypatch):
     with TestClient(app) as c:
         assert c.get("/health").json()["colab"]["state"] == "auth_broken"
 
-
-def test_parsers():
-    out = ("[fh-a-0] gpu-t4-s-x | Hardware: T4 | Shape: Standard | Variant: GPU | Status: IDLE\n"
-           "  Last Execution: stdin at 2026-10-15 12:00:00\n"
-           "[?] gpu-l4-s-y | Hardware: L4 | Shape: Standard | Variant: GPU\n")
-    got = colab.parse_sessions(out)
-    assert [(s.name, s.hardware) for s in got] == [("fh-a-0", "T4"), ("?", "L4")]
-    assert colab.parse_sessions("[colab] No active sessions found on server.") == []
-    u = colab.parse_usage("Current balance: 255.61 compute units\nUsage rate: 1.76/hr\n"
-                          "Active assignments: 1")
-    assert (u.balance, u.rate_per_hour, u.assignments) == (255.61, 1.76, 1)
-    assert colab.marker_line("noise\n@@fh-poll {\"a\": 1}\n", "@@fh-poll") == '{"a": 1}'

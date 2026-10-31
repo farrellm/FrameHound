@@ -44,6 +44,7 @@ def colab_housekeeping(forever: bool = True) -> None:
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    logging.getLogger("colabkit").setLevel(logging.DEBUG)  # every colab CLI call, timed
     queues = argv or ["io"]
     s = settings()
     if "index" in queues and s.index_backend == "colab":
