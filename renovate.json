@@ -1,0 +1,24 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "schedule": ["before 6am on monday"],
+  "lockFileMaintenance": { "enabled": true },
+  "packageRules": [
+    {
+      "description": "Python versions (Docker image, .python-version, requires-python) are chosen by hand; the indexer must match the Colab runtime",
+      "matchDepNames": ["python"],
+      "enabled": false
+    },
+    {
+      "description": "A Postgres major needs a pg_upgrade of Bitmagnet's data volume; do it by hand",
+      "matchDepNames": ["postgres"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "groupName": "web dev tools",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"]
+    }
+  ]
+}
