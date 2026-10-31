@@ -167,7 +167,7 @@ Indexing works on the proxy or on the source, whichever the VM has. Detection qu
 
 ### Orchestration: `ColabIndexBackend`
 
-The backend is a Python class that shells out to the `colab` CLI (v0.7.x; `--auth` from `COLAB_AUTH`, default the CLI's own oauth2, or `adc`). All calls go through one adapter (`server/framehound/colab.py`). Every command passes an explicit `-s fh-{movie_id}-{attempt}`. Omitting `-s` would auto-generate a random name and make later commands ambiguous.
+The backend is a Python class that shells out to the `colab` CLI (v0.7.x; `--auth` from `COLAB_AUTH`, default the CLI's own oauth2, or `adc`). All calls go through one adapter (`server/framehound/colab.py`), over the CLI wrapper in [colabkit](https://github.com/farrellm/colabkit), which degas shares. Every command passes an explicit `-s fh-{movie_id}-{attempt}`. Omitting `-s` would auto-generate a random name and make later commands ambiguous.
 
 ```
  1. colab usage                                  # check compute-unit balance vs. budget

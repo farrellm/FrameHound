@@ -12,6 +12,8 @@ import threading
 import time
 import traceback
 
+from colabkit import ColabError
+
 from . import db
 from .config import settings
 from .errors import Cancelled, FHError
@@ -167,7 +169,9 @@ class Job:
         self._end("cancelled", message="Cancelled")
 
     def fail(self, err: BaseException) -> FHError:
-        if not isinstance(err, FHError):
+        if isinstance(err, ColabError):
+            err = FHError(err.code, err.message, detail=err.detail)
+        elif not isinstance(err, FHError):
             err = FHError("internal", "Something went wrong on the server.",
                           detail="".join(traceback.format_exception(err))[-2000:])
         self._end("failed", error=err.message, error_code=err.code, message=err.detail)

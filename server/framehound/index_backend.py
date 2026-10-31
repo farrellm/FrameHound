@@ -229,7 +229,7 @@ class ColabIndexBackend:
 
     def _exec(self, session: str, script: str, marker: str, timeout: float = 120,
               **env: str) -> str:
-        out = self.cli.exec_file(session, REMOTE_SCRIPTS / script, env, timeout=timeout)
+        out = self.cli.exec(session, file=REMOTE_SCRIPTS / script, env=env, timeout=timeout)
         found = marker_line(out, marker)
         if found is None:
             if "Session '" in out and ("not found" in out or "lost" in out):
