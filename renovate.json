@@ -20,5 +20,15 @@
       "matchManagers": ["npm"],
       "matchDepTypes": ["devDependencies"]
     }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions annotated with # renovate: comments",
+      "managerFilePatterns": ["/(^|/)[^/]*\\.Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\nARG [A-Z_]+=(?<currentValue>\\S+)"
+      ]
+    }
   ]
 }
