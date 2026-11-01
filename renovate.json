@@ -1,9 +1,30 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests", ":semanticCommitsDisabled"],
   "schedule": ["before 6am on monday"],
   "lockFileMaintenance": { "enabled": true },
   "packageRules": [
+    {
+      "groupName": "github actions",
+      "matchManagers": ["github-actions"]
+    },
+    {
+      "description": "Digest-pinned and gated by CI; majors still wait for review",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "automerge": true
+    },
+    {
+      "groupName": "web dev tools",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"]
+    },
+    {
+      "description": "colabkit is our own shared library; a new tag gets its own PR",
+      "groupName": "python",
+      "matchManagers": ["pep621"],
+      "matchDepNames": ["!colabkit"]
+    },
     {
       "description": "Python versions (Docker image, .python-version, requires-python) are chosen by hand; the indexer must match the Colab runtime",
       "matchDepNames": ["python"],
@@ -14,17 +35,12 @@
       "matchDepNames": ["postgres"],
       "matchUpdateTypes": ["major"],
       "enabled": false
-    },
-    {
-      "groupName": "web dev tools",
-      "matchManagers": ["npm"],
-      "matchDepTypes": ["devDependencies"]
     }
   ],
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Versions annotated with # renovate: comments",
+      "description": "Tool versions annotated with # renovate: comments",
       "managerFilePatterns": ["/(^|/)[^/]*\\.Dockerfile$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\nARG [A-Z_]+=(?<currentValue>\\S+)"
