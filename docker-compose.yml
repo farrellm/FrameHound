@@ -11,9 +11,13 @@ x-backend: &backend
       required: false
   environment:
     REDIS_URL: redis://redis:6379/0
+    # The image sets HF_HOME=/data/models; follow FH_MODELS_DIR when it moves.
+    HF_HOME: ${FH_MODELS_DIR:-/data/models}
   volumes:
     # FH_DATA_DIR (a host path) bind-mounts it instead of the named volume.
     - ${FH_DATA_DIR:-fh-data}:/data
+    # Model weights, when FH_MODELS_DIR=/models splits them off /data (.env.example).
+    - ${FH_MODELS_HOST_DIR:-fh-models}:/models
     # Movie files, when MEDIA_DIR=/library splits them off /data (.env.example).
     - ${FH_MEDIA_DIR:-fh-media}:/library
     # Movie files to add from the server, when IMPORT_DIR=/import (.env.example).
@@ -51,6 +55,7 @@ services:
     # port it listens on.
     environment:
       REDIS_URL: redis://redis:6379/0
+      HF_HOME: ${FH_MODELS_DIR:-/data/models}
       TORRENT_LISTEN: 0.0.0.0:${TORRENT_PORT:-6881},[::]:${TORRENT_PORT:-6881}
     ports:
       - "${TORRENT_PORT:-6881}-${TORRENT_PORT_LAST:-6883}:${TORRENT_PORT:-6881}-${TORRENT_PORT_LAST:-6883}/tcp"
@@ -73,6 +78,7 @@ services:
 
 volumes:
   fh-data:
+  fh-models:
   fh-media:
   fh-import:
   fh-redis:
