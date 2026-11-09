@@ -8,7 +8,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /usr/local/bin/uv
 
 # The colab CLI drives indexing on Colab GPUs; pinned, since its output is parsed.
 # renovate: datasource=pypi depName=google-colab-cli
-ARG COLAB_CLI_VERSION=0.7.4
+ARG COLAB_CLI_VERSION=0.7.5
 RUN UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
     uv tool install --python /usr/local/bin/python3 google-colab-cli==${COLAB_CLI_VERSION}
 
